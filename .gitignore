@@ -1,0 +1,23 @@
+# ЛИЧНЫЕ ДАННЫЕ ИГРОКА В РЕПОЗИТОРИЙ НЕ ПОПАДАЮТ.
+#
+# Путь к живым SavedVariables содержит имя папки аккаунта WoW, имена папок
+# персонажей - имена персонажей, а префикс папки - номер реалма. Всё это
+# лежит в одном файле, и он здесь:
+ForeverPilot/Tests/local_paths.lua
+
+# Служебное
+__pycache__/
+*.pyc
+*.bak
+.DS_Store
+Thumbs.db
+
+# Рабочий сор инструментов проверки: создаётся заново, к коду не относится.
+ForeverPilot/Tests/.mutate_results.json
+ForeverPilot/Tests/.mutate_stash.txt
+ForeverPilot/Tests/.mutate_stash/
+.mutate_stash/
+
+# Никогда не коммитить данные персонажа
+WTF/
+SavedVariables/

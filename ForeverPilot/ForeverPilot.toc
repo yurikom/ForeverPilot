@@ -1,0 +1,65 @@
+## Interface: 16001
+## Title: ForeverPilot
+## Title-ruRU: ForeverPilot
+## Notes: Suggests the next best thing to do: craft, buy, enchant or sell. Advice only - you act.
+## Notes-ruRU: Подсказывает, что сделать дальше: скрафтить, купить, наложить чары, продать. Только советы - действуете вы.
+## Author: ForeverPilot
+## Version: 0.1.0
+## IconTexture: Interface\Icons\INV_Misc_PocketWatch_01
+## AddonCompartmentFunc: ForeverPilot_OnAddonCompartmentClick
+## SavedVariables: ForeverPilotDB, FOREVERPILOT_DIAG
+## SavedVariablesPerCharacter: ForeverPilotCharDB
+## OptionalDeps: Auctionator, Syndicator, Mastercraft, TomTom
+## X-Category: Professions
+
+Core\Const.lua
+Core\Util.lua
+Core\Diag.lua
+Core\Geo.lua
+Core\Api.lua
+Core\Config.lua
+Core\Events.lua
+Data\SlotMap.lua
+Data\StatWeights.lua
+Data\ForeverSource.lua
+Data\Horizon.lua
+Data\Camp.lua
+Logic\RecipeBook.lua
+Logic\Roster.lua
+Logic\CharacterScanner.lua
+Logic\MarketHistory.lua
+Logic\Ledger.lua
+Logic\PriceProvider.lua
+Logic\Risk.lua
+Logic\CraftingPlanner.lua
+Logic\GearAdvisor.lua
+Logic\EnchantAdvisor.lua
+Logic\Places.lua
+Logic\ShoppingList.lua
+Logic\Dismissal.lua
+Logic\SanityChecks.lua
+Logic\SourceCheck.lua
+Logic\Appearance.lua
+Logic\Foresight.lua
+Logic\ActionEngine.lua
+Logic\VendorArbitrage.lua
+Logic\Favor.lua
+Logic\CampAdvisor.lua
+Logic\UpgradePaths.lua
+Logic\CrossCharacter.lua
+Logic\Disenchant.lua
+Logic\Resale.lua
+Logic\AuctionMoment.lua
+Logic\Notifier.lua
+Logic\Provenance.lua
+UI\Widgets.lua
+UI\Arrow.lua
+UI\Card.lua
+UI\StepPanel.lua
+UI\TabNow.lua
+UI\TabCharacter.lua
+UI\TabCraft.lua
+UI\TabSettings.lua
+UI\MinimapButton.lua
+UI\MainFrame.lua
+Main.lua
