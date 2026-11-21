@@ -1,14 +1,20 @@
 -- ForeverPilot / UI/Card.lua
 --
--- One row of the ranked list, and it is exactly three lines:
---   1. what to do, with the payoff on the right
---   2. why
---   3. what is missing, and the button
+-- Строка списка советов. В ней ОДНА строка текста и НИ ОДНОЙ КНОПКИ: слева
+-- иконка и что сделать, справа - что это даст.
 --
--- Все три строки стоят БЕЗ ПЕРЕНОСА, то есть всё, что не влезло по ширине,
--- обрезал бы клиент - по пикселям, посреди числа. Поэтому текст укорачиваем
--- сами и по измеренному месту (Card.RoomFor + W.SetFitted), а полный остаётся
--- в подсказке под курсором.
+-- ЩЕЛЧОК ПО СТРОКЕ ВЫБИРАЕТ СОВЕТ: справа от списка открывается его карточка
+-- (UI/TabNow.lua, Detail) - там всё остальное: почему, чего не хватает,
+-- материалы, целиком и с переносом строк, и одна золотая кнопка. Так устроено
+-- большое окно Polestar, и игрок попросил сделать так же: раньше в каждой
+-- строке было три строки текста и кнопка, и было «непонятно, на какую кнопку
+-- что, куда нажимать» (2026-11-21). Теперь список читается одним взглядом, а
+-- кнопка на экране одна - у выбранного совета.
+--
+-- Строка стоит БЕЗ ПЕРЕНОСА, то есть всё, что не влезло по ширине, обрезал бы
+-- клиент - по пикселям, посреди числа. Поэтому текст укорачиваем сами и по
+-- измеренному месту (Card.RoomFor + W.SetFitted), а полный стоит в карточке
+-- справа и в подсказке под курсором.
 --
 -- Cards are pooled and reused: the list is rebuilt often and creating frames
 -- every time would churn.
@@ -19,114 +25,94 @@ local W = ns.Widgets
 local Card = {}
 ns.Card = Card
 
-Card.HEIGHT = 74
+Card.HEIGHT = 30
 
--- РАЗМЕТКА ТРЁХ СТРОК, ЧИСЛАМИ В ОДНОМ МЕСТЕ -----------------------------
+-- РАЗМЕТКА СТРОКИ, ЧИСЛАМИ В ОДНОМ МЕСТЕ.
 --
--- Игрок прислал скриншот, на котором вторая и третья строки карточки
--- НАРИСОВАНЫ ДРУГ ПОВЕРХ ДРУГА: получилась каша из «Цена «Ж…» и обрывка
--- другого текста. Это не шрифт и не чужой аддон - это была наша арифметика.
---
--- Строка «почему» висела на нижней границе строки заголовка (сверху вниз), а
--- строка «чего не хватает» - на нижней границе иконки (снизу вверх). Два
--- отсчёта от разных краёв: пока шрифт мелкий, между ними оставался зазор, а
--- при настоящих высотах шрифтов клиента (заголовок ~14, мелкий ~12) они
--- налезали друг на друга на несколько пикселей. Ни одна проверка этого не
--- видела, потому что проверять было нечего: числа стояли по месту, каждое в
--- своём SetPoint.
---
--- Теперь они здесь, и выведены одно из другого:
---   * третья строка стоит НА РЯДУ КНОПОК, по их середине, а не над ними;
---   * ряд кнопок стоит от нижнего края;
---   * первая и вторая строки идут сверху вниз цепочкой.
--- Между второй и третьей строками остаётся зазор, и он проверяется:
--- Tests/test_nonsense.lua считает прямоугольники всех трёх строк по их
--- привязкам - так же, как их считает клиент, - и требует, чтобы ни одна пара
--- не пересекалась.
-Card.PAD = 11                -- отступ слева, он же у иконки
-Card.ICON = 34               -- сторона иконки
-Card.TEXT_LEFT = Card.PAD + Card.ICON + 10   -- где начинается текст
+-- Все отступы названы здесь и выведены одно из другого: когда они были вписаны
+-- по месту, строки карточки налезали друг на друга на несколько пикселей, и ни
+-- одна проверка этого не видела. Tests/test_nonsense.lua считает прямоугольники
+-- по привязкам - так же, как их считает клиент, - и требует, чтобы они лежали
+-- внутри строки и не пересекались.
+Card.PAD = 12                -- отступ слева, он же у иконки
+Card.ICON = 20               -- сторона иконки
+Card.TEXT_LEFT = Card.PAD + Card.ICON + 8    -- где начинается текст
 Card.LINE_H = 12             -- высота строки мелкого шрифта
-Card.BUTTON_H = 20
-Card.BUTTON_BOTTOM = 9       -- ряд кнопок от нижнего края карточки
--- Третья строка по середине ряда кнопок: так она читается как часть этого
--- ряда, а не как ещё одна строка текста, которой некуда встать.
-Card.ROW3_BOTTOM = Card.BUTTON_BOTTOM + (Card.BUTTON_H - Card.LINE_H) / 2
-Card.TEXT_RIGHT = 12        -- от правого края карточки до текста и до кнопок
-Card.GAP = 8                -- между текстом и тем, что стоит справа от него
+Card.TITLE_H = 14            -- высота строки заголовка
+Card.TITLE_TOP = (Card.HEIGHT - Card.TITLE_H) / 2   -- заголовок по середине строки
+Card.TEXT_RIGHT = 12         -- от правого края строки до текста
+Card.GAP = 10                -- между заголовком и выгодой
+-- Выгоде справа отведена эта доля строки - и всё, что не занял заголовок:
+-- «костёр для готовки и место ещё под 3 предмета лагеря» иначе не оставляет
+-- заголовку места.
+Card.BENEFIT_SHARE = 0.40
 
 Card.pool = {}
 
--- СКОЛЬКО МЕСТА У КАЖДОЙ СТРОКИ - ПО ТЕМ ЖЕ ЧИСЛАМ, ПО КОТОРЫМ СТОЯТ ПРИВЯЗКИ.
+-- Место под текст в строке: от иконки до правого отступа.
+function Card.TextArea(frame)
+    return (tonumber(frame:GetWidth()) or 0) - Card.TEXT_LEFT - Card.TEXT_RIGHT
+end
+
+-- СКОЛЬКО МЕСТА У ЗАГОЛОВКА И У ВЫГОДЫ - ПО ТЕМ ЖЕ ЧИСЛАМ, ПО КОТОРЫМ СТОЯТ
+-- ПРИВЯЗКИ.
 --
--- Строки без переноса, и то, что не влезло, обрезает клиент посреди числа.
--- Чтобы этого не было, ширину надо ЗНАТЬ, а не угадывать: здесь она считается
--- из разметки выше и из того, что сейчас нарисовано справа (кнопка, путь,
--- значок достоверности, полоска готовности). Кто меняет разметку, меняет и
--- это - иначе проверка в Tests/test_nonsense.lua поймает расхождение.
-function Card.RoomFor(frame, card, showAction, canRoute)
-    local full = tonumber(frame:GetWidth()) or 0
-    local left = Card.TEXT_LEFT
+-- Строка без переноса, и то, что не влезло, обрезает клиент посреди числа.
+-- Чтобы этого не было, ширину надо ЗНАТЬ, а не угадывать. Выгода получает свою
+-- долю и то, что заголовку не нужно (frame.benefitRoom считает Card.Fill, когда
+-- меряет заголовок); заголовок - то, что осталось слева от нарисованной выгоды.
+-- Кто меняет разметку, меняет и это - иначе проверка в Tests/test_nonsense.lua
+-- поймает расхождение.
+function Card.RoomFor(frame, card)
+    local area = Card.TextArea(frame)
     local out = {}
-    -- Первая строка: от текста до столбца выгоды.
-    out.title = full - left - (tonumber(frame.benefit:GetStringWidth()) or 0)
-        - Card.GAP - Card.TEXT_RIGHT
-    -- Вторая строка: до правого края карточки.
-    out.why = full - left - Card.TEXT_RIGHT
-    -- Третья строка: до того, что стоит справа.
-    local right = Card.TEXT_RIGHT
-    if showAction then right = right + (tonumber(frame.action:GetWidth()) or 0) end
-    if canRoute then right = right + (tonumber(frame.route:GetWidth()) or 0) + 6 end
-    right = right + (tonumber(frame.badge:GetWidth()) or 0) + Card.GAP
-    if card.plan then right = right + (tonumber(frame.meter:GetWidth()) or 0) + Card.GAP end
-    out.need = full - left - right - Card.GAP
+    out.benefit = frame.benefitRoom or math.floor(area * Card.BENEFIT_SHARE)
+    out.title = area - (tonumber(frame.benefit:GetStringWidth()) or 0) - Card.GAP
     return out
 end
 
-local function onCardEnter(self)
-    self.hover:Show()
-    local card = self.card
-    if not card then return end
-    local extra = {}
-    -- ПОЛНЫЙ ТЕКСТ ТОГО, ЧТО НЕ ВЛЕЗЛО В СТРОКУ.
-    --
-    -- Строки карточки укорачиваются по ширине окна (W.SetFitted) и помечаются
-    -- «…». Подсказка - то место, где ширина не мешает, поэтому здесь стоит
-    -- ровно то, что было укорочено, и целиком. Не укорочено - не повторяем:
-    -- второй раз та же фраза ничего не сообщает.
-    local cut = self.cut or {}
-    if cut.title and card.title then extra[#extra + 1] = card.title end
-    if cut.why and card.why then extra[#extra + 1] = card.why end
-    if cut.need and card.need then extra[#extra + 1] = card.need end
+-- ЧТО ИЗВЕСТНО О СОВЕТЕ СВЕРХ ЕГО СТРОК: материалы и шаги плана, второй
+-- вариант с той же вещью, где искать рецепт, чем проверить.
+--
+-- Одни и те же строки идут в два места: в подсказку под курсором и в карточку
+-- совета справа от списка. Раньше они жили только в подсказке, то есть до них
+-- надо было догадаться навести мышь.
+--
+-- forDetail: в карточке справа короткой строки «где искать рецепт» нет - там
+-- на месте кнопки стоит полное объяснение (Card.ActionNote), и вторая такая же
+-- фраза рядом была бы повтором.
+function Card.FactLines(card, forDetail)
+    local out = {}
+    if not card then return out end
     if card.plan then
         local plan = card.plan
         if plan.cost == 0 then
             -- Ноль - это не цена: «Материалы: 0м» читалось как «стоят ноль».
-            table.insert(extra, "Материалы: всё уже есть")
+            table.insert(out, "Материалы: всё уже есть")
         elseif plan.cost then
-            table.insert(extra, "Материалы: " .. U.money(plan.cost))
+            table.insert(out, "Материалы: " .. U.money(plan.cost))
         elseif plan.costPartial and plan.costPartial > 0 then
-            table.insert(extra, "Материалы: от " .. U.money(plan.costPartial)
+            table.insert(out, "Материалы: от " .. U.money(plan.costPartial)
                 .. " (часть цен неизвестна)")
         end
         if #plan.crafts > 1 then
-            table.insert(extra, "Шагов крафта: " .. #plan.crafts)
+            table.insert(out, "Шагов крафта: " .. #plan.crafts)
             for i = 1, math.min(5, #plan.crafts) do
                 local step = plan.crafts[i]
-                table.insert(extra, "  " .. i .. ". " .. (step.recipe.name or "?")
+                table.insert(out, "  " .. i .. ". " .. (step.recipe.name or "?")
                     .. " x" .. step.times)
             end
         end
         if plan.needsTrip then
-            table.insert(extra, "Часть материалов в банке или у других персонажей")
+            table.insert(out, "Часть материалов в банке или у других персонажей")
         end
         if plan.hasCycle then
-            table.insert(extra, "В цепочке есть циклическая зависимость — я её разорвал")
+            table.insert(out, "В цепочке есть циклическая зависимость — я её разорвал")
         end
         for _, line in ipairs(plan.shopping or {}) do
             local name = ns.ActionEngine.nameOf(line.itemID)
             local price = line.unit and U.money(line.unit * line.qty) or U.void(ns.VOID.NO_PRICE)
-            table.insert(extra, "Нужно: " .. name .. " x" .. line.qty .. " — " .. price)
+            table.insert(out, "Нужно: " .. name .. " x" .. line.qty .. " — " .. price)
         end
     end
     -- ВТОРОЙ ВАРИАНТ С ТОЙ ЖЕ ВЕЩЬЮ. Надеть и продать - взаимоисключающие
@@ -135,34 +121,35 @@ local function onCardEnter(self)
     -- второй вариант числом: в строке «почему» он есть, но она на экране
     -- обрезается шириной окна, а подсказка - нет.
     if card.alsoSell then
-        table.insert(extra, "Или продать, а не надевать: прибыль "
+        table.insert(out, "Или продать, а не надевать: прибыль "
             .. tostring(card.alsoSell.benefit)
             .. (card.alsoSell.revenue
                 and (", выручка " .. U.money(card.alsoSell.revenue)) or ""))
     end
-    -- ГДЕ ИСКАТЬ РЕЦЕПТ - ОДНОЙ СТРОКОЙ, ЗДЕСЬ ЖЕ.
-    --
-    -- Длинного объяснения (Card.ActionNote: «Окно профессий я не открываю:
-    -- игра это аддонам запрещает…») в подсказке нет и быть не должно: такое
-    -- объяснение занимало здесь пять строк поверх игровых данных о предмете -
-    -- то есть поверх того, за чем игрок на подсказку и смотрел, - и
-    -- повторялось на каждом совете, которого касалась мышь.
-    --
-    -- Но и над списком оно больше не висит: там теперь одна короткая строка про
-    -- то, что часть советов не показана (UI/TabNow.lua). Вопрос «а где кнопка?»
-    -- возникает у конкретного совета, поэтому ответ стоит у него же и ровно
-    -- одной строкой - Card.ActionNoteShort. Полный текст - в подробностях над
-    -- списком и в подсказке панели.
-    local short = Card.ActionNoteShort(card)
-    if short then table.insert(extra, short) end
+    if not forDetail then
+        -- ГДЕ ИСКАТЬ РЕЦЕПТ - ОДНОЙ СТРОКОЙ, ЗДЕСЬ ЖЕ.
+        --
+        -- Длинного объяснения (Card.ActionNote: «Окно профессий я не открываю:
+        -- игра это аддонам запрещает…») в подсказке нет и быть не должно: такое
+        -- объяснение занимало здесь пять строк поверх игровых данных о предмете -
+        -- то есть поверх того, за чем игрок на подсказку и смотрел, - и
+        -- повторялось на каждом совете, которого касалась мышь.
+        --
+        -- Но и над списком оно больше не висит: там теперь одна короткая строка про
+        -- то, что часть советов не показана (UI/TabNow.lua). Вопрос «а где кнопка?»
+        -- возникает у конкретного совета, поэтому ответ стоит у него же и ровно
+        -- одной строкой - Card.ActionNoteShort. Полный текст - в подробностях над
+        -- списком и в подсказке панели.
+        local short = Card.ActionNoteShort(card)
+        if short then table.insert(out, short) end
+    end
     -- И то, что относится к делу один раз: где это поправить, чем проверить.
     -- В строке совета такой подсказке места нет - она занимает место совета.
     if type(card.tipNote) == "string" and card.tipNote ~= "" then
-        table.insert(extra, card.tipNote)
+        table.insert(out, card.tipNote)
     end
     local placeTip = card.place and ns.Places:CardTip(card.place)
-    if placeTip then table.insert(extra, placeTip) end
-    table.insert(extra, "Достоверность: " .. (ns.CONF_LABEL[card.conf] or "?"))
+    if placeTip then table.insert(out, placeTip) end
     -- ОТКУДА ЧИСЛА - РЯДОМ С ДОСТОВЕРНОСТЬЮ, А НЕ В СТРОКЕ «ПОЧЕМУ».
     --
     -- Адрес сайта, дата его чтения и то, с чем сверены номера, - это ответ на
@@ -170,12 +157,17 @@ local function onCardEnter(self)
     -- В строке «почему» на экране это сто с лишним символов, из-за которых
     -- сам совет не виден (см. Logic/Favor.lua, CaveatText).
     if type(card.sourceNote) == "string" and card.sourceNote ~= "" then
-        table.insert(extra, card.sourceNote)
+        table.insert(out, card.sourceNote)
     end
-    -- МЕСТО В СПИСКЕ, А НЕ БАЛЛ. Здесь стояло «Приоритет: 0.46 (профиль
-    -- «Сила»)»: число без шкалы - много это или мало, игроку понять нечем. То,
-    -- что он за ним хотел бы узнать, - какой этот совет по счёту и что решает
-    -- порядок. Это и сказано. Сам балл остаётся в файле диагностики.
+    return out
+end
+
+-- МЕСТО В СПИСКЕ, А НЕ БАЛЛ. Здесь стояло «Приоритет: 0.46 (профиль
+-- «Сила»)»: число без шкалы - много это или мало, игроку понять нечем. То,
+-- что он за ним хотел бы узнать, - какой этот совет по счёту и что решает
+-- порядок. Это и сказано. Сам балл остаётся в файле диагностики.
+function Card.PlaceLine(card)
+    if not card then return nil end
     local position, total = nil, 0
     for i, other in ipairs((ns.ActionEngine and ns.ActionEngine.cards) or {}) do
         total = i
@@ -183,12 +175,49 @@ local function onCardEnter(self)
             position = position or i
         end
     end
-    if position then
-        table.insert(extra, "Место в общем списке: " .. position .. " из " .. total
-            .. " (порядок задаёт профиль «"
-            .. (ns.PROFILE_LABEL[ns.Config:Profile()] or "?") .. "»)")
-    end
+    if not position then return nil end
+    return "Место в общем списке: " .. position .. " из " .. total
+        .. " (порядок задаёт профиль «"
+        .. (ns.PROFILE_LABEL[ns.Config:Profile()] or "?") .. "»)"
+end
 
+-- Подсказка строки списка. cut - что в строке было укорочено (frame.cut).
+function Card.TipLines(card, cut)
+    local extra = {}
+    if not card then return extra end
+    cut = cut or {}
+    -- ПОЛНЫЙ ТЕКСТ ТОГО, ЧТО НЕ ВЛЕЗЛО В СТРОКУ.
+    --
+    -- Строки укорачиваются по ширине окна (W.SetFitted) и помечаются «…».
+    -- Подсказка - то место, где ширина не мешает, поэтому здесь стоит ровно то,
+    -- что было укорочено, и целиком. Не укорочено - не повторяем: второй раз та
+    -- же фраза ничего не сообщает.
+    if cut.title and card.title then extra[#extra + 1] = card.title end
+    if cut.benefit and card.benefit then extra[#extra + 1] = card.benefit end
+    -- «Почему» и «чего не хватает» в строке списка нет вовсе (они в карточке
+    -- справа), поэтому под курсором они есть всегда.
+    if card.why and card.why ~= "" then extra[#extra + 1] = card.why end
+    if card.need and card.need ~= "" then extra[#extra + 1] = card.need end
+    for _, line in ipairs(Card.FactLines(card)) do
+        if line == card.sourceNote then
+            -- Достоверность стоит перед источником чисел, как и раньше.
+            extra[#extra + 1] = "Достоверность: " .. (ns.CONF_LABEL[card.conf] or "?")
+        end
+        extra[#extra + 1] = line
+    end
+    if not (type(card.sourceNote) == "string" and card.sourceNote ~= "") then
+        extra[#extra + 1] = "Достоверность: " .. (ns.CONF_LABEL[card.conf] or "?")
+    end
+    local place = Card.PlaceLine(card)
+    if place then extra[#extra + 1] = place end
+    return extra
+end
+
+local function onCardEnter(self)
+    self.hover:Show()
+    local card = self.card
+    if not card then return end
+    local extra = Card.TipLines(card, self.cut)
     if card.link then
         W.ShowItemTip(self, card.link, extra)
     else
@@ -209,90 +238,71 @@ function Card.Acquire(parent, index)
         return frame
     end
 
+    local T = W.THEME
     frame = CreateFrame("Button", nil, parent)
     frame:SetHeight(Card.HEIGHT)
-    W.Backdrop(frame, 0.08, 0.08, 0.10, 0.80, 0.08)
+
+    -- Фон: строка лежит прямо на списке, без коробки. Заливка появляется
+    -- только у выбранной строки и у закреплённого сверху совета.
+    local bg = frame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(frame)
+    bg:SetColorTexture(1, 1, 1, 0)
+    frame.fpBG = bg
 
     local hover = frame:CreateTexture(nil, "BORDER")
     hover:SetAllPoints(frame)
-    local hc = W.COLOR.rowHover
-    hover:SetColorTexture(hc[1], hc[2], hc[3], hc[4])
+    W.Paint(hover, T.hover)
     hover:Hide()
     frame.hover = hover
 
-    -- A coloured spine on the left tells the kind apart at a glance.
+    -- Цвет вида совета - узкой полоской слева.
     local spine = frame:CreateTexture(nil, "ARTWORK")
-    spine:SetPoint("TOPLEFT", 0, 0)
-    spine:SetPoint("BOTTOMLEFT", 0, 0)
-    spine:SetWidth(3)
+    spine:SetPoint("TOPLEFT", 0, -5)
+    spine:SetPoint("BOTTOMLEFT", 0, 5)
+    spine:SetWidth(2)
     frame.spine = spine
+
+    -- У выбранной строки вместо неё - золотая полоска во всю высоту.
+    local bar = frame:CreateTexture(nil, "ARTWORK")
+    bar:SetPoint("TOPLEFT", 0, 0)
+    bar:SetPoint("BOTTOMLEFT", 0, 0)
+    bar:SetWidth(3)
+    W.Paint(bar, T.accent, 1)
+    bar:Hide()
+    frame.bar = bar
 
     local icon = frame:CreateTexture(nil, "ARTWORK")
     icon:SetSize(Card.ICON, Card.ICON)
-    icon:SetPoint("TOPLEFT", Card.PAD, -9)
+    icon:SetPoint("TOPLEFT", frame, "TOPLEFT", Card.PAD, -(Card.HEIGHT - Card.ICON) / 2)
     icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
     frame.icon = icon
 
-    -- Line 1: title left, payoff right.
-    frame.benefit = W.Label(frame, "", W.FONT_NORMAL)
-    frame.benefit:SetPoint("TOPRIGHT", -12, -9)
+    frame.benefit = W.Label(frame, "", W.FONT_SMALL)
+    frame.benefit:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -Card.TEXT_RIGHT,
+        -(Card.HEIGHT - Card.LINE_H) / 2)
     frame.benefit:SetJustifyH("RIGHT")
+    frame.benefit:SetWordWrap(false)
+    frame.benefit:SetHeight(Card.LINE_H)
 
-    frame.title = W.Label(frame, "", W.FONT_NORMAL, 1, 1, 1)
-    frame.title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, 1)
-    frame.title:SetPoint("RIGHT", frame.benefit, "LEFT", -8, 0)
+    frame.title = W.Label(frame, "", W.FONT_NORMAL, T.text[1], T.text[2], T.text[3])
+    frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", Card.TEXT_LEFT, -Card.TITLE_TOP)
+    frame.title:SetPoint("RIGHT", frame.benefit, "LEFT", -Card.GAP, 0)
     frame.title:SetJustifyH("LEFT")
     frame.title:SetWordWrap(false)
-
-    -- Line 2: why.
-    frame.why = W.Label(frame, "", W.FONT_SMALL, 0.72, 0.72, 0.72)
-    frame.why:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -3)
-    frame.why:SetPoint("RIGHT", frame, "RIGHT", -12, 0)
-    frame.why:SetJustifyH("LEFT")
-    frame.why:SetWordWrap(false)
-    frame.why:SetHeight(Card.LINE_H)
-
-    -- Line 3: what is missing, plus the button and the badges on the right.
-    frame.action = W.Button(frame, "", 128, Card.BUTTON_H)
-    frame.action:SetPoint("BOTTOMRIGHT", -12, Card.BUTTON_BOTTOM)
-
-    -- The route button. Only shown when there is somewhere to go AND something
-    -- to draw the arrow with; otherwise the place goes in the text instead.
-    frame.route = W.Button(frame, "Показать путь", 110, 20)
-    frame.route:SetPoint("RIGHT", frame.action, "LEFT", -6, 0)
-    frame.route:Hide()
-
-    frame.badge = W.ConfBadge(frame, ns.CONF.UNKNOWN)
-    frame.badge:SetPoint("RIGHT", frame.route, "LEFT", -8, 0)
-
-    frame.meter = W.Meter(frame, 44, 4)
-    frame.meter:SetPoint("RIGHT", frame.badge, "LEFT", -8, 0)
-
-    -- ТРЕТЬЯ СТРОКА - ОТ НИЖНЕГО КРАЯ, А НЕ ОТ ИКОНКИ.
-    --
-    -- Здесь стояло `SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, -1)`, то
-    -- есть строка висела на иконке и ехала вверх, навстречу строке «почему».
-    -- Так они и столкнулись (см. разметку в начале файла). Обе привязки ниже
-    -- дают одну и ту же высоту - середину ряда кнопок, - поэтому спорить между
-    -- собой они не могут.
-    frame.need = W.Label(frame, "", W.FONT_SMALL, 0.85, 0.72, 0.45)
-    frame.need:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", Card.TEXT_LEFT, Card.ROW3_BOTTOM)
-    frame.need:SetPoint("RIGHT", frame.meter, "LEFT", -8, 0)
-    frame.need:SetJustifyH("LEFT")
-    frame.need:SetWordWrap(false)
-    frame.need:SetHeight(Card.LINE_H)
+    frame.title:SetHeight(Card.TITLE_H)
 
     frame:SetScript("OnEnter", onCardEnter)
     frame:SetScript("OnLeave", onCardLeave)
     frame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     frame:SetScript("OnClick", function(self, button)
         if button == "RightButton" then
-            -- Two deliberate clicks, not one stray one. See Card.RequestDismiss.
             Card.RequestDismiss(self.card)
         else
-            -- Any left-click is "I meant something else", so it disarms.
+            -- ЛЕВЫЙ ЩЕЛЧОК ВЫБИРАЕТ, А НЕ ВЫПОЛНЯЕТ. Действие - на золотой
+            -- кнопке в карточке справа: так по списку можно ходить, ничего
+            -- не запуская, и всегда видно, что именно будет нажато.
             Card.Disarm()
-            Card.Activate(self.card)
+            Card.Pick(self.card)
         end
     end)
 
@@ -449,109 +459,116 @@ function Card.ActionNoteShort(card)
     return nil
 end
 
-function Card.Fill(frame, card)
+-- ВЫГОДА В УЗКОЙ СТРОКЕ. Когда она начинается с числа («+8% ко всем
+-- характеристикам», «1з 70с за штуку»), ценно начало, и уходят слова с конца:
+-- «+8% ко всем …». Общий сокращатель (U.shortenings) бережёт ПОСЛЕДНЕЕ число
+-- фразы и от такой строки оставлял «… +8% ко» - число цело, а смысла нет.
+-- Числовая группа и здесь не режется: слова уходят целиком (U.atoms), и
+-- предлог в конце не остаётся висеть.
+function Card.FitBenefit(fs, text, room)
+    text = tostring(text or "")
+    room = tonumber(room) or 0
+    local memo = fs.fpBenefit
+    if memo and memo.text == text and memo.room == room then
+        fs:SetText(memo.out)
+        return memo.out, memo.cut
+    end
+    fs:SetText(text)
+    local out, cut = text, false
+    if room >= W.FIT_MIN and (tonumber(fs:GetStringWidth()) or 0) > room then
+        local atoms = U.atoms(text)
+        if atoms[1] and atoms[1].number and #atoms > 1 then
+            local variants = { text }
+            for k = #atoms - 1, 1, -1 do
+                local last = atoms[k]
+                if last.number or U.charLen(last.text) > 2 then
+                    local parts = {}
+                    for i = 1, k do parts[i] = atoms[i].text end
+                    variants[#variants + 1] = table.concat(parts, " ") .. " " .. U.MORE_MARK
+                end
+            end
+            out, cut = W.SetFittedFrom(fs, variants, room)
+        else
+            out, cut = W.SetFitted(fs, text, room)
+        end
+    end
+    fs.fpBenefit = { text = text, room = room, out = out, cut = cut }
+    return out, cut
+end
+
+-- Кто-то слушает выбор строки (список советов в UI/TabNow.lua).
+Card.OnPick = nil
+
+function Card.Pick(card)
+    if not (card and Card.OnPick) then return end
+    return ns.Diag:Guard("Card.Pick", Card.OnPick, card)
+end
+
+-- Выбранная строка: светлее и с золотой полоской слева.
+function Card.SetSelected(frame, on)
+    frame.selected = on and true or false
+    local card = frame.card
+    if frame.selected then
+        W.Paint(frame.fpBG, W.THEME.selected)
+        frame.bar:Show()
+        frame.spine:Hide()
+    else
+        if card and card.pinTop then
+            -- Закреплённый сверху совет (без него остальные неполны) - тёплым.
+            frame.fpBG:SetColorTexture(0.89, 0.72, 0.38, 0.07)
+        else
+            frame.fpBG:SetColorTexture(1, 1, 1, 0)
+        end
+        frame.bar:Hide()
+        frame.spine:Show()
+    end
+end
+
+function Card.Fill(frame, card, selected)
     frame.card = card
+    local T = W.THEME
 
     local spine = Card.SpineColor(card.kind)
-    frame.spine:SetColorTexture(spine[1], spine[2], spine[3], 0.95)
-
-    if card.pinTop then
-        frame.fpBG:SetColorTexture(0.16, 0.11, 0.04, 0.92)
-    else
-        frame.fpBG:SetColorTexture(0.08, 0.08, 0.10, 0.80)
-    end
+    frame.spine:SetColorTexture(spine[1], spine[2], spine[3], 0.85)
+    Card.SetSelected(frame, selected)
 
     frame.icon:SetTexture(card.icon or ns.KIND_ICON[card.kind] or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-    -- Сам текст заголовка ставится в конце, вместе с остальными строками: его
-    -- ширина зависит от столбца выгоды, а тот ещё не заполнен.
     if card.pinTop then
         frame.title:SetTextColor(1, 0.86, 0.55)
     else
-        frame.title:SetTextColor(1, 1, 1)
+        frame.title:SetTextColor(T.text[1], T.text[2], T.text[3])
     end
 
-    frame.benefit:SetText(card.benefit or "")
     local bc = W.benefitColor(card.benefitKind)
     frame.benefit:SetTextColor(bc[1], bc[2], bc[3])
 
-    local ready = card.plan and card.plan.ready
-    if ready then
-        frame.need:SetTextColor(0.50, 0.85, 0.55)
-    elseif card.kind == ns.KIND.SETUP then
-        frame.need:SetTextColor(1.00, 0.80, 0.40)
-    else
-        frame.need:SetTextColor(0.85, 0.72, 0.45)
-    end
-
-    frame.badge:Set(card.conf)
-    frame.meter:SetValue(card.plan and card.plan.readiness or (card.pinTop and 0 or 1))
-    if card.plan then frame.meter:Show() else frame.meter:Hide() end
-
-    local label = Card.ActionLabel(card)
-    frame.action:SetLabel(label)
-    frame.action:SetScript("OnClick", function() Card.Activate(card) end)
-    -- Подсказка кнопки: что именно она сделает сейчас. Подпись у кнопки одна, а
-    -- дел у неё три (свой совет, аукцион, профессия) - без подсказки непонятно,
-    -- почему она то одна, то другая.
-    frame.action:SetScript("OnEnter", function(self)
-        self.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
-        local title, body = Card.ActionTip(card)
-        if title then W.ShowTip(self, title, body) end
-    end)
-    frame.action:SetScript("OnLeave", function(self)
-        self.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
-        W.HideTip()
-    end)
-    local showAction = not (card.action and card.action.kind == "noop")
-        and Card.ActionReady(card)
-    if showAction then frame.action:Show() else frame.action:Hide() end
-
-    -- Route button: needs a place with coordinates and a navigation addon to
-    -- hand them to. Missing either one is normal, and then there is no button.
-    local canRoute = card.place and card.place.routable and ns.Places:CanRoute()
-    if canRoute then
-        frame.route:Show()
-        frame.route:SetScript("OnClick", function() Card.Route(card) end)
-        frame.route:SetScript("OnEnter", function(self)
-            self.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
-            W.ShowTip(self, "Показать путь", {
-                ns.Places:Describe(card.place) or "",
-                "Поставлю метку на карте и стрелку на экране.",
-                "Иду я туда не сам — идёте вы.",
-            })
-        end)
-        frame.route:SetScript("OnLeave", function(self)
-            self.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
-            W.HideTip()
-        end)
-    else
-        frame.route:Hide()
-    end
-
-    -- Keep the badge anchored to whatever is actually visible.
-    frame.badge:ClearAllPoints()
-    if canRoute then
-        frame.badge:SetPoint("RIGHT", frame.route, "LEFT", -8, 0)
-    elseif showAction then
-        frame.badge:SetPoint("RIGHT", frame.action, "LEFT", -8, 0)
-    else
-        frame.badge:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 9)
-    end
-
-    -- ТЕКСТ - ПОСЛЕДНИМ, И ПО ИЗМЕРЕННОМУ МЕСТУ.
+    -- ТЕКСТ СТАВИТСЯ ПОСЛЕДНИМ И ПО ИЗМЕРЕННОМУ МЕСТУ.
     --
-    -- Раньше здесь стояло три SetText, а лишнее обрезал клиент - по пикселям,
-    -- то есть посреди числа («Разница +8з 80…»). Теперь сколько места есть,
-    -- столько и занимаем: ширина считается по разметке и по тому, что сейчас
-    -- нарисовано справа, а укорачивает текст W.SetFitted - целыми кусками и не
-    -- разрезая чисел. Поэтому ставится текст ПОСЛЕ кнопок: до них ширина
-    -- третьей строки неизвестна.
-    local room = Card.RoomFor(frame, card, showAction, canRoute)
-    local _, titleCut = W.SetFitted(frame.title, card.title or "", room.title)
-    local _, whyCut = W.SetFitted(frame.why, card.why or "", room.why)
-    local _, needCut = W.SetFitted(frame.need, card.need or "", room.need)
-    frame.cut = { title = titleCut, why = whyCut, need = needCut }
+    -- Сначала меряется заголовок целиком: выгоде достаётся её доля строки и
+    -- всё, что заголовку не нужно. Потом заголовок получает то, что осталось
+    -- слева от нарисованной выгоды. Что не влезло, укорачивается по смыслу и
+    -- помечается «…» (W.SetFitted): посреди числа ничего не режется, а полный
+    -- текст стоит в карточке справа и в подсказке.
+    local area = Card.TextArea(frame)
+    local title = tostring(card.title or "")
+    -- Ширина заголовка целиком запоминается: список перерисовывается часто, а
+    -- совет в строке обычно тот же - мерить его шрифтом каждый раз незачем.
+    local known = frame.fpTitleWidth
+    local titleNeeds
+    if known and known.text == title then
+        titleNeeds = known.width
+    else
+        frame.title:SetText(title)
+        titleNeeds = tonumber(frame.title:GetStringWidth()) or 0
+        frame.fpTitleWidth = { text = title, width = titleNeeds }
+    end
+    frame.benefitRoom = math.max(math.floor(area * Card.BENEFIT_SHARE),
+        area - titleNeeds - Card.GAP)
+    local _, benefitCut = Card.FitBenefit(frame.benefit, card.benefit or "", frame.benefitRoom)
+    local room = Card.RoomFor(frame, card)
+    local _, titleCut = W.SetFitted(frame.title, title, room.title)
+    frame.cut = { title = titleCut, benefit = benefitCut }
     return frame
 end
 

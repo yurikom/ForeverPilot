@@ -200,7 +200,8 @@ do
 
     local drawn = 0
     for _, row in ipairs(rows) do
-        if row.action.__shown then drawn = drawn + 1 end
+        -- Кнопка действия - в карточке справа: щелчок по строке её открывает.
+        if S.actionOf(ns, row) then drawn = drawn + 1 end
     end
     H.eq(drawn, 0, "ни у одного такого совета кнопка не нарисована")
     H.eq(recipeLabelsOnScreen(env), 0,
@@ -237,7 +238,8 @@ do
     -- 2. Нажатие «призрака»: кнопка скрыта, но обработчик у неё остался с
     --    прошлой отрисовки. Нажать его нельзя, а вызвать можно.
     for _, row in ipairs(rows) do
-        local ok, err = press(row.action)
+        S.pick(ns, row)
+        local ok, err = press(ns.Detail.action)
         H.ok(ok, "обработчик скрытой кнопки не падает", tostring(err))
     end
     H.eq(calls(env), 0, "обработчик скрытой кнопки до клиента не дошёл")
@@ -291,7 +293,7 @@ do
         H.eq(recipeLabelsOnScreen(env), 0, case.name .. ": подписей на экране нет")
         local rows = recipeRows(env)
         H.ok(#rows > 0, case.name .. ": советы с рецептом есть")
-        for _, row in ipairs(rows) do press(row, "LeftButton"); press(row.action) end
+        for _, row in ipairs(rows) do press(row, "LeftButton"); press(ns.Detail.action) end
         H.eq(calls(env), 0, case.name .. ": клиент не зовётся")
         H.eq(errorCount(env), 0, case.name .. ": ошибок в диагностике нет")
     end
@@ -340,12 +342,18 @@ do
     H.eq(tip:find(S.plain(ns.RecipeBook.NOTE), 1, true), nil,
         "длинного объяснения в подсказке совета нет")
 
-    -- Щелчок по совету говорит то же самое, и ровно одной строкой.
+    -- ЩЕЛЧОК ПО СОВЕТУ ОТКРЫВАЕТ ЕГО КАРТОЧКУ, И ТАМ НА МЕСТЕ КНОПКИ - ТА ЖЕ
+    -- СТРОКА. В чат при этом ничего не пишется: ответ стоит на экране, рядом с
+    -- советом, а не уезжает вверх вместе с чатом.
     env.said = {}
     press(rows[1], "LeftButton")
-    H.eq(#env.said, 1, "щелчок отвечает одной строкой")
-    H.ok(S.plain(env.said[1] or ""):find(S.plain(own), 1, true) ~= nil,
-        "и это та же строка, что в подсказке: " .. tostring(env.said[1]))
+    H.eq(#env.said, 0, "щелчок в чат ничего не пишет")
+    local detail = ns.Detail
+    H.eq(detail.card, rows[1].card, "совет открыт в карточке справа")
+    H.eq(detail.action.__shown, false, "кнопки действия в карточке нет")
+    H.eq(detail.note.__shown, true, "на её месте стоит строка")
+    H.ok(S.plain(detail.note:GetText() or ""):find(S.plain(own), 1, true) ~= nil,
+        "и это та же строка, что в подсказке: " .. tostring(detail.note:GetText()))
 end
 
 H.suite("Рецепт: своя строка у КАЖДОГО такого совета, а не только у первого")

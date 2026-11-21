@@ -36,6 +36,9 @@ for _, name in ipairs({
     "SetHighlightTexture", "SetPushedTexture", "SetDisabledTexture",
     "SetText", "GetText", "SetFontObject", "SetJustifyH", "SetJustifyV",
     "SetTextColor", "SetWordWrap", "GetStringWidth", "GetStringHeight",
+    -- Ширина текста без переноса (по ней считается, сколько строк он займёт) и
+    -- то, что сейчас лежит в текстуре (так узнаётся, нашёл ли клиент файл).
+    "GetUnboundedStringWidth", "GetTexture",
     "SetMaxLines", "SetSpacing", "SetAlpha", "GetAlpha",
     "SetMinMaxValues", "GetMinMaxValues", "SetValue", "GetValue",
     "SetValueStep", "SetObeyStepOnDrag", "SetOrientation", "SetThumbTexture",
@@ -135,6 +138,10 @@ frameMT = {
             fn = function(self) self.__points = {} end
         elseif key == "SetTexture" then
             fn = function(self, v) self.__texture = v end
+        elseif key == "GetTexture" then
+            fn = function(self) return self.__texture end
+        elseif key == "GetUnboundedStringWidth" then
+            fn = function(self) return #(self.__text or "") * 6 end
         elseif key == "SetTexCoord" then
             fn = function(self, ...) self.__texCoord = { ... } end
         elseif key == "SetMask" or key == "SetMaskTexture" then
@@ -407,10 +414,15 @@ do
             tostring(err))
         if ok then
             filled = filled + 1
-            -- The three lines must actually have reached the font strings.
-            H.ok(frame.title:GetText() ~= "", "   строка 1 заполнена")
-            H.ok(frame.why:GetText() ~= "", "   строка 2 заполнена")
-            H.ok(frame.need:GetText() ~= "", "   строка 3 заполнена")
+            -- В строке списка - заголовок и выгода; «почему» и «чего не
+            -- хватает» стоят в карточке совета справа, целиком.
+            H.ok(frame.title:GetText() ~= "", "   заголовок заполнен")
+            ns.TabNow:SelectCard(card)
+            H.eq(ns.Detail.card, card, "   совет открыт в карточке справа")
+            H.ok(ns.Detail.why.__shown and (ns.Detail.why:GetText() or "") ~= "",
+                "   «почему» в карточке заполнено")
+            H.ok(ns.Detail.need.__shown and (ns.Detail.need:GetText() or "") ~= "",
+                "   «чего не хватает» в карточке заполнено")
             H.ok(frame.benefit:GetText() ~= "", "   выгода справа заполнена")
         end
     end
@@ -672,7 +684,10 @@ do
     -- место под заметку кончилось, и проверка начала падать на правильном коде.
     -- Проверяется здесь «заметка показывается, когда есть место», а не «900
     -- пикселей достаточно», поэтому запас большой.
-    ns.TabNow.scroll.__height = 4000
+    -- Высота списка считается от высоты самого окна (Main:HostNow), поэтому
+    -- высоким делается окно, а не вложенная в него рамка.
+    local savedW, savedH = ns.MainFrame.frame:GetWidth(), ns.MainFrame.frame:GetHeight()
+    ns.MainFrame.frame:SetSize(savedW, 4000)
     local ok, err = pcall(function() ns.TabNow:Render() end)
     H.ok(ok, "отрисовка прошла", tostring(err))
 
@@ -731,10 +746,10 @@ do
 
     -- Низкое окно: карточки занимают всё место, заметка не должна вылезать
     -- за край и отжимать список.
-    ns.TabNow.scroll.__height = 120
+    ns.MainFrame.frame:SetSize(savedW, 200)
     ns.TabNow:Render()
     H.eq(ns.TabNow.note.__shown, false, "в тесном окне заметка не показывается")
-    ns.TabNow.scroll.__height = nil
+    ns.MainFrame.frame:SetSize(savedW, savedH)
 
     ns.ActionEngine.meta.branches = savedBranches
     ns.ActionEngine.meta.priceSources = savedPrices

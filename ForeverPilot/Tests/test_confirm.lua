@@ -326,6 +326,8 @@ end
 local RESTORES = {
     ["Вернуть все скрытые советы"] = "dismissed",
     ["Вернуть все"] = "dismissed",
+    -- Кнопка в шапке списка: есть только тогда, когда есть что возвращать.
+    ["Вернуть скрытые"] = "dismissed",
     ["/fp show"] = "dismissed", ["/fp вернуть"] = "dismissed", ["/fp показать"] = "dismissed",
     ["/fp undo"] = "dismissed", ["/fp отмена"] = "dismissed", ["/fp назад"] = "dismissed",
 }

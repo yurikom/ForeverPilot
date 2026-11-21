@@ -166,14 +166,14 @@ function Panel:Build()
         })
     end)
     f.close:SetScript("OnLeave", function(self2)
-        self2.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
+        self2:Repaint(false)
         W.HideTip()
     end)
 
     f.collapse = W.Button(f, "—", 18, 14, function() Panel:ToggleCollapsed() end)
     f.collapse:SetPoint("TOPRIGHT", f.close, "TOPLEFT", -4, 0)
     f.collapse:SetScript("OnEnter", function(self2)
-        self2.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
+        self2:Repaint(true)
         W.ShowTip(self2, ns.Config:Get().panel.collapsed
             and "Развернуть панель" or "Свернуть панель",
             "Свёрнутая панель — одна строка с названием совета."
@@ -181,7 +181,7 @@ function Panel:Build()
                 .. ns.GLYPH.CLOSE .. ".")
     end)
     f.collapse:SetScript("OnLeave", function(self2)
-        self2.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
+        self2:Repaint(false)
         W.HideTip()
     end)
 
@@ -232,7 +232,7 @@ function Panel:Build()
     f.next:SetPoint("TOPRIGHT", f.collapse, "TOPLEFT", -Panel.NEXT_GAP, 0)
     f.next:Hide()
     f.next:SetScript("OnEnter", function(self2)
-        self2.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
+        self2:Repaint(true)
         W.ShowTip(self2, "Следующий совет", {
             "Листаю советы по кругу: этот никуда не денется и вернётся,"
                 .. " когда круг замкнётся.",
@@ -240,7 +240,7 @@ function Panel:Build()
         })
     end)
     f.next:SetScript("OnLeave", function(self2)
-        self2.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
+        self2:Repaint(false)
         W.HideTip()
     end)
 

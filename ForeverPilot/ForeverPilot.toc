@@ -5,7 +5,8 @@
 ## Notes-ruRU: Подсказывает, что сделать дальше: скрафтить, купить, наложить чары, продать. Только советы - действуете вы.
 ## Author: ForeverPilot
 ## Version: 0.1.0
-## IconTexture: Interface\Icons\INV_Misc_PocketWatch_01
+## IconTexture: Interface\AddOns\ForeverPilot\Media\Icon
+## X-Media: 1
 ## AddonCompartmentFunc: ForeverPilot_OnAddonCompartmentClick
 ## SavedVariables: ForeverPilotDB, FOREVERPILOT_DIAG
 ## SavedVariablesPerCharacter: ForeverPilotCharDB

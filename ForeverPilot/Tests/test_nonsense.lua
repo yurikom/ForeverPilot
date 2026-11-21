@@ -432,11 +432,13 @@ do
             for _, r in ipairs(ns.Card.pool) do
                 if r.__shown and r.card and r.card.key == again.key then row = r end
             end
-            H.ok(row ~= nil and row.action and row.action.__shown, "кнопка совета нарисована")
-            if row and row.action then
+            -- Кнопка совета теперь в карточке справа: щелчок по строке, потом она.
+            local button = row and S.actionOf(ns, row) or nil
+            H.ok(button ~= nil, "кнопка совета нарисована")
+            if button then
                 env.said = {}
                 ns.Api.lastSaid = nil
-                row.action.__scripts.OnClick(row.action)
+                button.__scripts.OnClick(button)
                 local lines = said(env)
                 H.eq(#lines, 1, "ответ один")
                 H.ok(tostring(lines[1]):find("уже в вашем списке покупок", 1, true) ~= nil,
@@ -921,8 +923,8 @@ do
         frame:SetWidth(640)
         ns.Card.Fill(frame, card)
         local box = {}
-        for _, l in ipairs({ { "заголовок", frame.title }, { "почему", frame.why },
-                             { "чего не хватает", frame.need } }) do
+        for _, l in ipairs({ { "заголовок", frame.title }, { "выгода", frame.benefit },
+                             { "иконка", frame.icon } }) do
             local t, b = rangeY(l[2], frame)
             H.ok(t ~= nil, "строка «" .. l[1] .. "» привязана к карточке")
             if t then
@@ -933,18 +935,27 @@ do
                     .. ns.Card.HEIGHT .. ")")
             end
         end
-        for _, pair in ipairs({ { "заголовок", "почему" },
-                                { "почему", "чего не хватает" },
-                                { "заголовок", "чего не хватает" } }) do
-            local a, b = box[pair[1]], box[pair[2]]
-            if a and b then
-                local over = overlapY(a, b)
-                if over > worst then
-                    worst, worstWhere = over, pair[1] .. " / " .. pair[2]
-                end
-                H.eq(over, 0, "«" .. pair[1] .. "» и «" .. pair[2]
-                    .. "» не пересекаются (карточка " .. i .. ")")
+        -- Строка в одну линию: заголовок и выгода стоят рядом, а не друг над
+        -- другом, так что по вертикали им пересекаться можно - проверяется,
+        -- что они не налезают ПО ГОРИЗОНТАЛИ (и на иконку тоже).
+        local rects = {}
+        for _, l in ipairs({ { "заголовок", frame.title }, { "выгода", frame.benefit },
+                             { "иконка", frame.icon } }) do
+            rects[l[1]] = S.rectOf(l[2], frame)
+        end
+        -- У заголовка ширина - сколько нарисовано, а не сколько отведено.
+        if rects["заголовок"] then
+            rects["заголовок"].right = rects["заголовок"].left
+                + S.textWidth(S.plain(frame.title:GetText() or ""))
+        end
+        for _, pair in ipairs({ { "заголовок", "выгода" }, { "иконка", "заголовок" } }) do
+            local ox, oy = S.rectOverlap(rects[pair[1]], rects[pair[2]])
+            local over = (ox > 0 and oy > 0) and ox or 0
+            if over > worst then
+                worst, worstWhere = over, pair[1] .. " / " .. pair[2]
             end
+            H.eq(over, 0, "«" .. pair[1] .. "» и «" .. pair[2]
+                .. "» не налезают друг на друга (карточка " .. i .. ")")
         end
     end
     H.eq(worst, 0, "самое большое наложение по всему списку — ноль"
@@ -953,7 +964,7 @@ do
     -- И числа разметки названы в одном месте, а не вписаны по месту: иначе
     -- следующая правка разведёт их снова.
     for _, key in ipairs({ "HEIGHT", "PAD", "ICON", "TEXT_LEFT", "LINE_H",
-                           "BUTTON_H", "BUTTON_BOTTOM", "ROW3_BOTTOM" }) do
+                           "TITLE_H", "TITLE_TOP", "TEXT_RIGHT", "GAP" }) do
         H.ok(type(ns.Card[key]) == "number", "разметка названа: ns.Card." .. key)
     end
 end
@@ -1031,7 +1042,8 @@ do
     H.ok(first ~= nil, "первый совет нарисован")
     if first then
         local rect = S.rectOf(first, ns.TabNow.content)
-        H.ok(rect ~= nil and rect.top >= -(ns.TabNow.STRIP_H + 14),
+        -- Между строкой и первым советом - только заголовок его раздела.
+        H.ok(rect ~= nil and rect.top >= -(ns.TabNow.STRIP_H + 14 + ns.TabNow.SECTION_H),
             "и он начинается сразу под строкой ("
             .. string.format("%.0f", rect and rect.top or 0) .. ")")
     end
@@ -1049,8 +1061,8 @@ do
     local env = screenshotWorld()
     local ns = env.ns
     local clash, checked = {}, 0
-    for _, width in ipairs({ ns.MainFrame.MIN_WIDTH, 720, 1000 }) do
-        S.layout(env, width, 560)
+    for _, width in ipairs({ ns.MainFrame.MIN_WIDTH, 980, 1280 }) do
+        S.layout(env, width, 600)
         ns.MainFrame:RenderActive()
         local tab = ns.TabNow
         local parts = { { "строка статистики", tab.summary },
@@ -1105,31 +1117,33 @@ do
     row:SetWidth(640)
     ns.Card.Fill(row, card)
 
-    local why = S.plain(row.why:GetText() or "")
-    local need = S.plain(row.need:GetText() or "")
-    local room = ns.Card.RoomFor(row, card, row.action.__shown and true or false,
-        row.route.__shown and true or false)
-    H.ok(S.textWidth(why) <= room.why,
-        "строка «почему» влезает: " .. S.textWidth(why) .. " при " .. room.why)
-    H.ok(S.textWidth(need) <= room.need,
-        "строка «нужно» влезает: " .. S.textWidth(need) .. " при " .. room.need)
+    -- В СТРОКЕ СПИСКА теперь только заголовок и выгода: длинному тексту там не
+    -- место, и резать его больше незачем.
+    H.eq(rawget(row, "why"), nil, "строки «почему» в списке нет")
+    H.eq(rawget(row, "need"), nil, "и строки «чего не хватает» тоже")
 
-    -- ЧИСЛО И КООРДИНАТЫ - ЦЕЛИКОМ, А НЕ ПОЛОВИНОЙ.
-    H.ok(why:find("+8з 80с", 1, true) ~= nil,
-        "сумма осталась целой: " .. why)
-    H.eq(why:find("+8з 80%f[%D]") ~= nil and why:find("+8з 80с", 1, true) == nil, false,
-        "и не превратилась в «+8з 80»")
+    -- А В КАРТОЧКЕ СПРАВА ОБЕ ФРАЗЫ СТОЯТ ЦЕЛИКОМ: там перенос строк, и резать
+    -- нечего - ни сумму, ни координаты торговца.
+    S.layout(env)
+    ns.TabNow:SelectCard(card)
+    local detail = ns.Detail
+    H.eq(detail.card, card, "совет открыт в карточке справа")
+    H.eq(detail.why.__shown, true, "«почему» в карточке показано")
+    H.eq(S.plain(detail.why:GetText() or ""), WHY, "и стоит целиком, без обрезки")
+    H.eq(detail.need.__shown, true, "«чего не хватает» в карточке показано")
+    local need = S.plain(detail.need:GetText() or "")
+    H.eq(need, NEED, "и тоже целиком")
     H.ok(need:find("78.2 51.9", 1, true) ~= nil,
         "координаты остались целыми: " .. need)
-    H.ok(why:find(ns.Util.MORE_MARK, 1, true) ~= nil,
-        "и видно, что это не всё: строка помечена «…»")
 
     -- Оговорка про недоверие к числу не выброшена: 1468% без неё - ложь.
     card.why = WHY .. " Числа этой карточки не сходятся — проверьте цену на месте."
     ns.Card.Fill(row, card)
-    local doubted = S.plain(row.why:GetText() or "")
+    ns.TabNow:SelectCard(card)
+    local doubted = S.plain(detail.why:GetText() or "")
     H.ok(doubted:find("не сходятся", 1, true) ~= nil,
         "оговорка осталась на экране: " .. doubted)
+    H.ok(doubted:find("1468%", 1, true) ~= nil, "и стоит рядом со своим числом")
 
     -- А полный текст - под курсором, целиком.
     local tip = {}

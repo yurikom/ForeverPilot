@@ -922,14 +922,18 @@ do
             end
         end
         -- И отдельно то, из-за чего эта проверка появилась: строка статистики
-        -- стоит СВОЕЙ полосой, ниже ряда фильтров, а не рядом с ним.
-        local stats, chip
+        -- не делит место с фильтрами. Раньше она стояла своей полосой под их
+        -- рядом; теперь фильтры - колонкой слева, а строка - в шапке списка,
+        -- то есть целиком ПРАВЕЕ любого из них.
+        local stats
         for _, one in ipairs(st.bands) do
             if one.name == "строка статистики" then stats = one end
-            if one.name:find("^фильтр") then chip = chip or one end
         end
-        if stats and chip and stats.rect.top > chip.rect.bottom - 0.5 then
-            sameBand[#sameBand + 1] = st.state .. ": строка статистики в одной полосе с фильтрами"
+        for _, one in ipairs(st.bands) do
+            if stats and one.name:find("^фильтр") and stats.rect.left < one.rect.right - 0.5 then
+                sameBand[#sameBand + 1] = st.state .. ": строка статистики в одной полосе с фильтрами"
+                break
+            end
         end
     end
     H.ok(checked > 500, "пар элементов шапки сверено: " .. checked)
@@ -942,6 +946,67 @@ do
     H.eq(#sameBand, 0, "строка статистики не делит полосу с кнопками фильтров"
         .. ((#sameBand > 0) and ("  <- " .. table.concat(sameBand, "; ", 1,
             math.min(3, #sameBand))) or ""))
+end
+
+H.suite("Разметка карточки совета: ничто не нарисовано поверх другого")
+do
+    -- Карточка справа от списка собирается руками: высота каждого куска текста
+    -- считается, и следующий ставится под ним. Ошибка в этом счёте видна только
+    -- на экране - текст поверх текста или поверх кнопки. Поэтому для КАЖДОГО
+    -- совета в КАЖДОМ состоянии мира прямоугольники частей карточки сверяются
+    -- попарно, по тем же привязкам, по которым их ставит клиент.
+    H.ok(#CORPUS.details > 60, "карточек советов измерено: " .. #CORPUS.details)
+    local clash, outside, unpicked, checked = {}, {}, {}, 0
+    for _, d in ipairs(CORPUS.details) do
+        local where = d.state .. " / «" .. tostring(d.card.title) .. "»"
+        if not d.picked then unpicked[#unpicked + 1] = where end
+        for i = 1, #d.parts do
+            local one = d.parts[i]
+            if not one.rect then
+                outside[#outside + 1] = where .. ": «" .. one.name .. "» ни к чему не привязано"
+            else
+                if one.rect.left < -0.5 or one.rect.right > d.width + 0.5
+                    or one.rect.top > 0.5 or one.rect.bottom < -d.height - 0.5 then
+                    outside[#outside + 1] = where .. ": «" .. one.name .. "» за краем карточки"
+                end
+                for j = i + 1, #d.parts do
+                    local two = d.parts[j]
+                    if two.rect then
+                        checked = checked + 1
+                        local dx, dy = S.rectOverlap(one.rect, two.rect)
+                        if dx > 0 and dy > 0 then
+                            clash[#clash + 1] = where .. ": «" .. one.name .. "» и «" .. two.name
+                                .. "» налезают на " .. string.format("%.0f x %.0f px", dx, dy)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    H.ok(checked > 1500, "пар частей карточки сверено: " .. checked)
+    H.eq(#unpicked, 0, "щелчок по строке каждый раз открывал именно этот совет"
+        .. ((#unpicked > 0) and ("  <- " .. table.concat(unpicked, "; ", 1, math.min(3, #unpicked))) or ""))
+    H.eq(#clash, 0, "ни одной пары, нарисованной друг поверх друга"
+        .. ((#clash > 0) and ("  <- " .. table.concat(clash, "; ", 1, math.min(4, #clash))) or ""))
+    H.eq(#outside, 0, "и ничего не ушло за край карточки"
+        .. ((#outside > 0) and ("  <- " .. table.concat(outside, "; ", 1, math.min(4, #outside))) or ""))
+
+    -- И ТЕКСТ В КАРТОЧКЕ - ЦЕЛИКОМ: то, что показано, равно тому, что в совете.
+    local shortened, compared = {}, 0
+    for _, d in ipairs(CORPUS.details) do
+        for _, part in ipairs(d.parts) do
+            if part.full and part.drawn then
+                compared = compared + 1
+                if part.drawn ~= part.full then
+                    shortened[#shortened + 1] = d.state .. " / «" .. tostring(d.card.title)
+                        .. "»: «" .. part.name .. "» — " .. part.drawn
+                end
+            end
+        end
+    end
+    H.ok(compared > 200, "текстов карточки сверено с советом: " .. compared)
+    H.eq(#shortened, 0, "в карточке ничего не укорочено"
+        .. ((#shortened > 0) and ("  <- " .. table.concat(shortened, "; ", 1, math.min(3, #shortened))) or ""))
 end
 
 H.suite("Вода: в строке совета не обрезано ни одно число и ни одни координаты")
@@ -1342,16 +1407,18 @@ do
     local worst, pressedRows = {}, 0
     for _, row in ipairs(ns.Card.pool) do
         if row.__shown and row.card then
-            -- КНОПКА, А ЕСЛИ ЕЁ НЕТ - САМА КАРТОЧКА.
+            -- КНОПКА В КАРТОЧКЕ СОВЕТА, А ЕСЛИ ЕЁ НЕТ - САМА СТРОКА.
             --
-            -- У советов про рецепт кнопки нет вовсе (открыть окно профессий
-            -- игра аддонам запрещает), а отвечают они на щелчок по карточке - и
-            -- повторяться им нельзя точно так же. Пока здесь нажимались только
-            -- кнопки, эти ответы не проверялись ни разу.
+            -- Кнопка действия стоит в карточке справа: щелчок по строке
+            -- открывает совет, и нажимается она. У советов про рецепт кнопки
+            -- нет вовсе (открыть окно профессий игра аддонам запрещает) - у них
+            -- десять раз щёлкается сама строка, и повторяться в чат ей нельзя
+            -- точно так же.
             local target, handler, what
-            if row.action and row.action.__shown then
-                target, what = row.action, tostring(row.card.action.label)
-                handler = row.action.__scripts and row.action.__scripts.OnClick
+            local button = S.actionOf(ns, row)
+            if button then
+                target, what = button, tostring(row.card.action.label)
+                handler = button.__scripts and button.__scripts.OnClick
             else
                 target, what = row, "щелчок по совету «"
                     .. tostring(row.card.title) .. "»"
@@ -1897,12 +1964,9 @@ do
             local drawn, over, lost = 0, {}, {}
             for _, row in ipairs(ns.Card.pool) do
                 if row.__shown and row.card then
-                    local room = ns.Card.RoomFor(row, row.card,
-                        row.action.__shown and true or false,
-                        row.route.__shown and true or false)
+                    local room = ns.Card.RoomFor(row, row.card)
                     for _, pair in ipairs({ { "заголовок", row.title, row.card.title, room.title },
-                                            { "почему", row.why, row.card.why, room.why },
-                                            { "нужно", row.need, row.card.need, room.need } }) do
+                                            { "выгода", row.benefit, row.card.benefit, room.benefit } }) do
                         local text = S.plain(pair[2]:GetText() or "")
                         if text ~= "" then
                             drawn = drawn + 1
@@ -1964,8 +2028,10 @@ do
             -- Место у каждой строки изменилось, значит мерить надо заново: это
             -- и есть «первая» отрисовка, и считать её надо на изменившемся
             -- мире, а не на том, который только что нарисовали.
+            -- Берётся самое узкое окно: в нём укорачивать приходится больше
+            -- всего, то есть это и самая дорогая отрисовка из возможных.
             W.fitMemoHits, W.fitMemoMisses = 0, 0
-            S.layout(env, 980, 560)
+            S.layout(env, ns.MainFrame.MIN_WIDTH, ns.MainFrame.MIN_HEIGHT)
             ns.MainFrame:RenderActive()
             local firstCalls, firstVariants = counted.calls, counted.variants
             H.ok(firstCalls > 0, "отрисовка в окне другой ширины строит варианты"

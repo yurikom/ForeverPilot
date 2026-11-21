@@ -1733,6 +1733,35 @@ local function cooldownLeft(fn, itemID, now)
     if left < 0 then left = 0 end
     return left
 end
+-- ВИДИТ ЛИ КЛИЕНТ ФАЙЛЫ, КОТОРЫЕ ПОЯВИЛИСЬ В ПАПКЕ АДДОНА.
+--
+-- Новый файл (картинку значка) клиент находит только после полного перезапуска
+-- игры: список файлов аддона он составляет при старте, и /reload его не
+-- обновляет. Текстура из ненайденного файла рисуется зелёным квадратом.
+--
+-- Спросить «есть ли файл» у клиента нечем, поэтому спрашиваем то, что читается
+-- в тот же момент - сам .toc. В нём стоит метка «X-Media»; если клиент отдаёт
+-- её нынешнее значение, значит .toc он перечитал уже после обновления, а с ним
+-- и список файлов. Не отдаёт (или функции нет) - считаем, что файлов не видит,
+-- и рисуем запасной значок из игры. Ошибиться здесь можно только в сторону
+-- старого значка, а не зелёного квадрата.
+Api.MEDIA_STAMP = "1"
+
+function Api:AddonMeta(field)
+    local getMeta = (_G.C_AddOns and _G.C_AddOns.GetAddOnMetadata) or _G.GetAddOnMetadata
+    if type(getMeta) ~= "function" then return nil end
+    local ok, value = pcall(getMeta, ADDON, field)
+    if ok and type(value) == "string" and value ~= "" then return value end
+    return nil
+end
+
+function Api:MediaReady()
+    if Api.mediaReady == nil then
+        Api.mediaReady = (Api:AddonMeta("X-Media") == Api.MEDIA_STAMP)
+    end
+    return Api.mediaReady
+end
+
 function Api:ItemCooldownRemaining(itemID)
     itemID = tonumber(itemID)
     if not itemID then return nil end

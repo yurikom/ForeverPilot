@@ -237,7 +237,7 @@ function Tab:Render()
     end
     if bare > 0 then
         note(bare .. " " .. U.plural(bare, "слот", "слота", "слотов")
-            .. " без чар — смотрите вкладку «Сейчас».")
+            .. " без чар — смотрите раздел «Советы».")
     end
     if empty > 0 then
         note(empty .. " " .. U.plural(empty, "слот пуст", "слота пусты", "слотов пусты") .. ".")

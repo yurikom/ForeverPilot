@@ -1655,7 +1655,7 @@ do
     ns.StepPanel:Build()
     ns.Config:Get().panel.pos = { 640, 480 }
     ns.StepPanel:ApplyPosition()
-    ns.Config:SaveFrame("TOPLEFT", "TOPLEFT", 150, -90, 820, 620)
+    ns.Config:SaveFrame("TOPLEFT", "TOPLEFT", 150, -90, 920, 620)
     ns.Config:SetScale(1.15)
     ns.Config:Get().ui.minimapAngle = 42
     ns.Config:Get().tab = "CRAFT"
@@ -1674,7 +1674,7 @@ do
     local ui = ns2.Config:Frame()
     H.eq(ui.point, "TOPLEFT", "точка привязки окна сохранилась")
     H.eq(ui.x, 150, "x окна сохранился")
-    H.eq(ui.width, 820, "ширина окна сохранилась")
+    H.eq(ui.width, 920, "ширина окна сохранилась")
     H.eq(ui.height, 620, "высота окна сохранилась")
     H.near(ns2.Config:Scale(), 1.15, 0.001, "масштаб сохранился")
     H.eq(ns2.Config:MinimapAngle(), 42, "угол кнопки у миникарты сохранился")
@@ -1684,7 +1684,7 @@ do
         "позиция панели сохранилась")
 
     -- И окно действительно получило сохранённый размер, а не дефолтный.
-    H.eq(ns2.MainFrame.frame:GetWidth(), 820, "окно построено сохранённой ширины")
+    H.eq(ns2.MainFrame.frame:GetWidth(), 920, "окно построено сохранённой ширины")
     H.eq(ns2.MainFrame.frame:GetHeight(), 620, "и сохранённой высоты")
 end
 

@@ -21,9 +21,80 @@ W.COLOR = {
     setup     = { 1.00, 0.72, 0.25 },
     rowOdd    = { 1, 1, 1, 0.025 },
     rowHover  = { 0.35, 0.60, 0.95, 0.12 },
-    chipOn    = { 0.25, 0.50, 0.90, 0.85 },
+    chipOn    = { 0.89, 0.72, 0.38, 0.34 },   -- выбранное - тем же золотым, что в окне
     chipOff   = { 1, 1, 1, 0.08 },
 }
+
+-- ТЕМА ОКНА. Раскладка и вид большого окна - по образцу Polestar (жалоба игрока
+-- 2026-11-21: «херовый UX, непонятно, куда нажимать… сделай так же, как у
+-- него»): ночной тёмно-синий фон, белая лесенка текста, линии в один пиксель и
+-- один тёплый золотой акцент - только на выбранном и на главной кнопке. Цвета и
+-- код здесь свои; у Polestar взят принцип, а не файлы.
+W.THEME = {
+    bg       = { 0.090, 0.110, 0.169, 0.97 },   -- окно и список
+    side     = { 0.071, 0.086, 0.141, 1.00 },   -- колонка категорий
+    rail     = { 0.055, 0.069, 0.118, 1.00 },   -- полоса разделов
+    band     = { 0.137, 0.169, 0.271, 1.00 },   -- шапка над списком
+    panel    = { 0.104, 0.127, 0.196, 1.00 },   -- карточка совета справа
+    foot     = { 0.071, 0.086, 0.141, 1.00 },   -- строка состояния
+    text     = { 0.95, 0.96, 0.98 },
+    dim      = { 0.74, 0.77, 0.85 },
+    muted    = { 0.56, 0.60, 0.70 },
+    line     = { 1, 1, 1, 0.09 },
+    hover    = { 1, 1, 1, 0.05 },
+    selected = { 1, 1, 1, 0.09 },
+    accent   = { 0.89, 0.72, 0.38 },
+    onAccent = { 0.07, 0.08, 0.11 },
+    button      = { 0.16, 0.19, 0.29, 0.95 },
+    buttonHover = { 0.23, 0.27, 0.40, 0.98 },
+}
+
+function W.Paint(tex, c, alpha)
+    tex:SetColorTexture(c[1], c[2], c[3], alpha or c[4] or 1)
+end
+
+-- Тонкая линия-разделитель. side: "TOP", "BOTTOM", "LEFT" или "RIGHT".
+function W.Hairline(frame, side)
+    local line = frame:CreateTexture(nil, "BORDER")
+    W.Paint(line, W.THEME.line)
+    if side == "TOP" then
+        line:SetPoint("TOPLEFT"); line:SetPoint("TOPRIGHT"); line:SetHeight(1)
+    elseif side == "BOTTOM" then
+        line:SetPoint("BOTTOMLEFT"); line:SetPoint("BOTTOMRIGHT"); line:SetHeight(1)
+    elseif side == "LEFT" then
+        line:SetPoint("TOPLEFT"); line:SetPoint("BOTTOMLEFT"); line:SetWidth(1)
+    else
+        line:SetPoint("TOPRIGHT"); line:SetPoint("BOTTOMRIGHT"); line:SetWidth(1)
+    end
+    return line
+end
+
+-- Заливка без рамки: колонки окна отделяются одной линией, а не коробкой.
+function W.Ground(frame, c)
+    if not frame.fpBG then
+        local bg = frame:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints(frame)
+        frame.fpBG = bg
+    end
+    W.Paint(frame.fpBG, c)
+    return frame
+end
+
+-- Текстура из своего файла, а пока клиент его не видит - запасная из игры.
+--
+-- Новый файл в папке аддона клиент находит только после полного перезапуска,
+-- не после /reload; до тех пор на его месте был бы зелёный квадрат. Видит ли
+-- он новые файлы, отвечает Api:MediaReady (по метке в .toc). И второй сторож:
+-- если SetTexture сам ответил «нет», тоже ставим запасную.
+function W.SetTextureOr(tex, path, fallback)
+    local ready = ns.Api and ns.Api.MediaReady and ns.Api:MediaReady()
+    if ready then
+        local ok, result = pcall(tex.SetTexture, tex, path)
+        if ok and result ~= false then return true end
+    end
+    tex:SetTexture(fallback)
+    return false
+end
 
 function W.benefitColor(kind)
     if kind == "gold" then return W.COLOR.gold end
@@ -170,23 +241,189 @@ end
 function W.Button(parent, text, width, height, onClick)
     local btn = CreateFrame("Button", nil, parent)
     btn:SetSize(width or 100, height or 22)
-    W.Backdrop(btn, 0.14, 0.16, 0.22, 0.95, 0.18)
+    local base = W.THEME.button
+    W.Backdrop(btn, base[1], base[2], base[3], base[4], 0.14)
     btn.text = W.Label(btn, text, W.FONT_SMALL)
     btn.text:SetPoint("CENTER")
     btn.text:SetJustifyH("CENTER")
-    btn:SetScript("OnEnter", function(self)
-        self.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
-    end)
-    btn:SetScript("OnLeave", function(self)
-        self.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
-    end)
+    btn:SetScript("OnEnter", function(self) self:Repaint(true) end)
+    btn:SetScript("OnLeave", function(self) self:Repaint(false) end)
     if onClick then btn:SetScript("OnClick", onClick) end
     function btn:SetLabel(t) self.text:SetText(t or "") end
+    -- ГЛАВНАЯ КНОПКА - ОДНА НА ЭКРАН, И ОНА ЗОЛОТАЯ. Всё остальное остаётся
+    -- тихим: так сразу видно, куда нажимать.
+    function btn:Repaint(hover)
+        local T = W.THEME
+        if self.primary then
+            local a, k = T.accent, hover and 1.10 or 1.0
+            self.fpBG:SetColorTexture(math.min(1, a[1] * k), math.min(1, a[2] * k),
+                math.min(1, a[3] * k), 0.98)
+        else
+            W.Paint(self.fpBG, hover and T.buttonHover or T.button)
+        end
+    end
+    function btn:SetPrimary(on)
+        self.primary = on and true or false
+        local c = self.primary and W.THEME.onAccent or { 0.92, 0.92, 0.92 }
+        self.text:SetTextColor(c[1], c[2], c[3])
+        self:Repaint(false)
+    end
     function btn:SetEnabledState(on)
         self:EnableMouse(on and true or false)
         self.text:SetTextColor(on and 0.92 or 0.45, on and 0.92 or 0.45, on and 0.92 or 0.45)
     end
     return btn
+end
+
+-- СТРОКА БОКОВОЙ КОЛОНКИ: категория со счётчиком или вариант выбора. Выбранная
+-- строка светлее и с золотой полоской слева - как в окне, с которого взят
+-- образец. Умеет то же, что прежняя кнопка-чип (SetSelected, подсказка), чтобы
+-- остальной код и проверки не заметили подмены.
+function W.NavRow(parent, text, onClick, height)
+    local T = W.THEME
+    local row = CreateFrame("Button", nil, parent)
+    row:SetHeight(height or 24)
+    local bg = row:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(row)
+    bg:SetColorTexture(1, 1, 1, 0)
+    row.fpBG = bg
+    local bar = row:CreateTexture(nil, "ARTWORK")
+    bar:SetPoint("TOPLEFT", 0, 0)
+    bar:SetPoint("BOTTOMLEFT", 0, 0)
+    bar:SetWidth(2)
+    W.Paint(bar, T.accent, 1)
+    bar:Hide()
+    row.bar = bar
+    row.count = W.Label(row, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+    row.count:SetPoint("RIGHT", row, "RIGHT", -12, 0)
+    row.count:SetJustifyH("RIGHT")
+    row.text = W.Label(row, text, W.FONT_SMALL, T.dim[1], T.dim[2], T.dim[3])
+    row.text:SetPoint("LEFT", row, "LEFT", 14, 0)
+    row.text:SetJustifyH("LEFT")
+    row.text:SetWordWrap(false)
+    row.selected = false
+
+    function row:SetSelected(on)
+        self.selected = on and true or false
+        if self.selected then
+            W.Paint(self.fpBG, T.selected)
+            self.bar:Show()
+            self.text:SetTextColor(T.text[1], T.text[2], T.text[3])
+        else
+            self.fpBG:SetColorTexture(1, 1, 1, 0)
+            self.bar:Hide()
+            local c = self.dim and T.muted or T.dim
+            self.text:SetTextColor(c[1], c[2], c[3])
+        end
+    end
+    function row:SetCount(n)
+        self.count:SetText((n ~= nil) and tostring(n) or "")
+    end
+    -- Пустая категория - приглушённо: нажать можно, но видно, что там ноль.
+    function row:SetDim(on)
+        self.dim = on and true or false
+        self:SetSelected(self.selected)
+    end
+    row:SetScript("OnEnter", function(self)
+        if not self.selected then W.Paint(self.fpBG, T.hover) end
+        if self.tooltipText then
+            W.ShowTip(self, self.tooltipTitle or self.text:GetText(), self.tooltipText)
+        end
+    end)
+    row:SetScript("OnLeave", function(self)
+        if not self.selected then self.fpBG:SetColorTexture(1, 1, 1, 0) end
+        W.HideTip()
+    end)
+    if onClick then row:SetScript("OnClick", onClick) end
+    return row
+end
+
+-- КНОПКА ПОЛОСЫ РАЗДЕЛОВ: значок, под ним подпись. Выбранный раздел светлее и
+-- с золотой полоской слева.
+function W.RailButton(parent, iconTexture, text, onClick, width, height)
+    local T = W.THEME
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(width or 88, height or 52)
+    local bg = btn:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(btn)
+    bg:SetColorTexture(1, 1, 1, 0)
+    btn.fpBG = bg
+    local bar = btn:CreateTexture(nil, "ARTWORK")
+    bar:SetPoint("TOPLEFT", 0, 0)
+    bar:SetPoint("BOTTOMLEFT", 0, 0)
+    bar:SetWidth(2)
+    W.Paint(bar, T.accent, 1)
+    bar:Hide()
+    btn.bar = bar
+    local icon = btn:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(20, 20)
+    icon:SetPoint("TOP", btn, "TOP", 0, -8)
+    icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    if iconTexture then icon:SetTexture(iconTexture) end
+    btn.icon = icon
+    btn.text = W.Label(btn, text, W.FONT_SMALL, T.dim[1], T.dim[2], T.dim[3])
+    btn.text:SetPoint("BOTTOM", btn, "BOTTOM", 0, 7)
+    btn.text:SetJustifyH("CENTER")
+    btn.selected = false
+
+    function btn:SetSelected(on)
+        self.selected = on and true or false
+        if self.selected then
+            W.Paint(self.fpBG, T.selected)
+            self.bar:Show()
+            self.text:SetTextColor(T.text[1], T.text[2], T.text[3])
+        else
+            self.fpBG:SetColorTexture(1, 1, 1, 0)
+            self.bar:Hide()
+            self.text:SetTextColor(T.dim[1], T.dim[2], T.dim[3])
+        end
+    end
+    btn:SetScript("OnEnter", function(self)
+        if not self.selected then W.Paint(self.fpBG, T.hover) end
+        if self.tooltipText then
+            W.ShowTip(self, self.tooltipTitle or self.text:GetText(), self.tooltipText)
+        end
+    end)
+    btn:SetScript("OnLeave", function(self)
+        if not self.selected then self.fpBG:SetColorTexture(1, 1, 1, 0) end
+        W.HideTip()
+    end)
+    if onClick then btn:SetScript("OnClick", onClick) end
+    return btn
+end
+
+-- ТЕКСТ В НЕСКОЛЬКО СТРОК ПО ЗАДАННОЙ ШИРИНЕ. Возвращает высоту, которую он
+-- займёт: по ней следующий блок ставится под этим.
+--
+-- Высоту знает клиент (GetStringHeight), и ему верим первому: своя оценка по
+-- длине строки всегда с запасом, и от неё между блоками остаются дыры. Оценка
+-- нужна в двух случаях: клиент старый и ширину без переноса не отдаёт, или он
+-- ответил «одна строка» про текст, которого заведомо на несколько, - значит,
+-- перенос ещё не посчитан. Тогда лишний зазор лучше, чем текст поверх кнопки.
+function W.SetWrapped(fs, text, width, lineHeight)
+    text = tostring(text or "")
+    lineHeight = lineHeight or 12
+    fs:SetWidth(width)
+    -- Высота сбрасывается в «сама по тексту»: заданная прошлым показом высота
+    -- иначе обрезала бы новый текст и занизила бы ответ клиента о его высоте.
+    fs:SetHeight(0)
+    if fs.SetWordWrap then fs:SetWordWrap(true) end
+    fs:SetText(text)
+    if text == "" then return 0 end
+    local unbounded = fs.GetUnboundedStringWidth and tonumber(fs:GetUnboundedStringWidth()) or nil
+    local full = unbounded or tonumber(fs:GetStringWidth()) or 0
+    local breaks = 0
+    for _ in text:gmatch("\n") do breaks = breaks + 1 end
+    local lines = math.max(1, math.ceil(full / math.max(1, width * 0.9))) + breaks
+    local estimate = lines * lineHeight
+    local real = fs.GetStringHeight and tonumber(fs:GetStringHeight()) or 0
+    -- Высоту самой строке не задаём: она остаётся «по тексту», и клиент ничего
+    -- не обрежет, даже если наш счёт разошёлся с его на пиксель. Число нужно
+    -- только тому, кто ставит следующий блок.
+    if unbounded and real > 0 and not (real <= lineHeight * 1.3 and lines >= 3) then
+        return math.ceil(real)
+    end
+    return math.max(estimate, math.ceil(real))
 end
 
 -- A toggle used for the profile buttons and the filter chips.
@@ -333,7 +570,8 @@ end
 -- area anywhere a list can come back empty.
 function W.EmptyState(parent, title, body, actionText, onAction)
     local frame = CreateFrame("Frame", nil, parent)
-    W.Backdrop(frame, 0.10, 0.09, 0.07, 0.75, 0.14)
+    local ground = W.THEME.panel
+    W.Backdrop(frame, ground[1], ground[2], ground[3], 0.92, 0.10)
     frame:SetHeight(actionText and 112 or 84)
 
     local icon = frame:CreateTexture(nil, "ARTWORK")
@@ -341,7 +579,8 @@ function W.EmptyState(parent, title, body, actionText, onAction)
     icon:SetPoint("TOPLEFT", 14, -14)
     icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
 
-    local head = W.Label(frame, title, W.FONT_NORMAL, 1, 0.82, 0)
+    local head = W.Label(frame, title, W.FONT_NORMAL,
+        W.THEME.accent[1], W.THEME.accent[2], W.THEME.accent[3])
     head:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -2)
     head:SetPoint("RIGHT", frame, "RIGHT", -14, 0)
     head:SetJustifyH("LEFT")
@@ -434,7 +673,8 @@ end
 function W.SectionHeader(parent, text, width)
     local frame = CreateFrame("Frame", nil, parent)
     frame:SetSize(width or 300, 22)
-    local fs = W.Label(frame, text, W.FONT_NORMAL, 1, 0.82, 0)
+    local fs = W.Label(frame, text, W.FONT_NORMAL,
+        W.THEME.accent[1], W.THEME.accent[2], W.THEME.accent[3])
     fs:SetPoint("BOTTOMLEFT", 0, 4)
     local line = frame:CreateTexture(nil, "ARTWORK")
     line:SetColorTexture(1, 1, 1, 0.10)

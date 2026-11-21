@@ -37,6 +37,9 @@ for _, name in ipairs({
     "SetHighlightTexture", "SetPushedTexture", "SetDisabledTexture",
     "SetText", "GetText", "SetFontObject", "SetJustifyH", "SetJustifyV",
     "SetTextColor", "SetWordWrap", "GetStringWidth", "GetStringHeight",
+    -- Ширина текста без переноса (по ней считается, сколько строк он займёт) и
+    -- то, что сейчас лежит в текстуре (так узнаётся, нашёл ли клиент файл).
+    "GetUnboundedStringWidth", "GetTexture",
     "SetMaxLines", "SetSpacing", "SetAlpha", "GetAlpha",
     "SetMinMaxValues", "GetMinMaxValues", "SetValue", "GetValue",
     "SetValueStep", "SetObeyStepOnDrag", "SetOrientation", "SetThumbTexture",
@@ -116,7 +119,25 @@ function S.newWorld()
                     return tex
                 end
             elseif key == "CreateFontString" then
-                fn = function(self) return newFrame("FontString", nil, self) end
+                fn = function(self, name, layer, font)
+                    local fs = newFrame("FontString", nil, self)
+                    fs.__layer, fs.__font = layer, font
+                    return fs
+                end
+            -- ЦВЕТА И «ВО ВЕСЬ РОДИТЕЛЬ» ЗАПИСЫВАЮТСЯ. Проверкам разметки они не
+            -- нужны, а картинке окна, которую по этим же рамкам рисует
+            -- Tests/preview.py, - нужны: без них видно прямоугольники, но не
+            -- видно, как окно выглядит.
+            elseif key == "SetColorTexture" then
+                fn = function(self, r, g, b, a) self.__color = { r, g, b, a } end
+            elseif key == "SetTextColor" then
+                fn = function(self, r, g, b, a) self.__textColor = { r, g, b, a } end
+            elseif key == "SetAllPoints" then
+                fn = function(self, other) self.__allPoints = other or true end
+            elseif key == "SetJustifyH" then
+                fn = function(self, v) self.__justifyH = v end
+            elseif key == "SetWordWrap" then
+                fn = function(self, v) self.__wrap = v and true or false end
             elseif key == "SetScript" then
                 fn = function(self, which, handler) self.__scripts[which] = handler end
             elseif key == "GetScript" then
@@ -158,6 +179,10 @@ function S.newWorld()
                 fn = function(self) self.__points = {} end
             elseif key == "SetTexture" then
                 fn = function(self, v) self.__texture = v end
+            elseif key == "GetTexture" then
+                fn = function(self) return self.__texture end
+            elseif key == "GetUnboundedStringWidth" then
+                fn = function(self) return S.textWidth(self.__text) end
             elseif key == "SetTexCoord" then
                 fn = function(self, ...) self.__texCoord = { ... } end
             elseif key == "SetMask" or key == "SetMaskTexture" then
@@ -189,7 +214,20 @@ function S.newWorld()
                 -- to behave like the client's, which is all it is used for.
                 fn = function(self) return S.textWidth(self.__text) end
             elseif key == "GetStringHeight" then
-                fn = function(self) return 12 end
+                -- Текст с заданной шириной переносится, и высота его - столько
+                -- строк, сколько вышло. Раньше заглушка отвечала «12» на любой
+                -- текст, и разметка, которая ставит блоки один под другим по
+                -- этой высоте, на бумаге не налезала никогда.
+                fn = function(self)
+                    local w = tonumber(self.__width) or 0
+                    local text = self.__text or ""
+                    if w <= 0 or self.__wrap == false or text == "" then return 12 end
+                    local lines = 0
+                    for para in (text .. "\n"):gmatch("([^\n]*)\n") do
+                        lines = lines + math.max(1, math.ceil(S.textWidth(para) / w))
+                    end
+                    return lines * 12
+                end
             elseif key == "GetPoint" then
                 fn = function(self) return "CENTER", nil, "CENTER", 0, 0 end
             elseif key == "GetLeft" then
@@ -381,7 +419,7 @@ end
 -- Поэтому размеры задаются явно и в одном месте - так же, как посчитал бы
 -- клиент: окно, вкладка по окну, список по вкладке. Числа отступов берутся у
 -- самих файлов интерфейса, а не повторяются здесь.
-S.WINDOW_WIDTH, S.WINDOW_HEIGHT = 720, 560
+S.WINDOW_WIDTH, S.WINDOW_HEIGHT = 980, 600
 
 function S.layout(env, width, height)
     local ns = env.ns
@@ -389,17 +427,56 @@ function S.layout(env, width, height)
     height = height or S.WINDOW_HEIGHT
     local main = ns.MainFrame
     if main and main.frame then main.frame:SetSize(width, height) end
-    -- Содержимое окна: UI/MainFrame.lua ставит его на 8 по бокам, 70 сверху и
-    -- 24 снизу.
-    local innerW, innerH = width - 16, height - 94
+    -- Площадь разделов - справа от полосы и над строкой состояния. Числа
+    -- отвечает само окно (Main.HostSize), а не повторяются здесь.
+    local innerW, innerH = width, height
+    if main and main.HostSize then innerW, innerH = main.HostSize(width, height) end
     if main and main.host then main.host.__width, main.host.__height = innerW, innerH end
+    if main and main.band then main.band.__width = innerW end
+    if main and main.page then
+        main.page.__width, main.page.__height = innerW, innerH - (main.BAND_H or 0)
+    end
+    if main and main.foot then main.foot.__width = innerW end
+    if main and main.rail then main.rail.__height = height - 2 end
+    -- «Советы»: три колонки, и ширины их отвечает сама вкладка (Tab.Columns).
     local tab = ns.TabNow
-    if tab and tab.frame then tab.frame.__width, tab.frame.__height = innerW, innerH end
-    if tab and tab.scroll then
-        tab.scroll.__width = innerW - tab.PAD - (tab.PAD + 22)
-        tab.scroll.__height = innerH - tab.LIST_TOP - tab.PAD
+    if tab and tab.frame then
+        tab.frame.__width, tab.frame.__height = innerW, innerH
+        local cols = tab.Columns(innerW)
+        if tab.side then tab.side.__height = innerH end
+        if tab.mainCol then tab.mainCol.__width, tab.mainCol.__height = cols.main, innerH end
+        if tab.band then tab.band.__width = cols.main end
+        if tab.pane then tab.pane.__height = innerH end
+        local detail = ns.Detail and ns.Detail.frame
+        if detail then detail.__width, detail.__height = cols.detail, innerH end
+        if tab.scroll then
+            tab.scroll.__width = cols.list
+            tab.scroll.__height = innerH - tab.LIST_TOP - tab.LIST_SIDE
+        end
     end
     return width, height
+end
+
+-- ЩЕЛЧОК ПО СТРОКЕ СПИСКА ------------------------------------------------
+--
+-- Кнопок в строках списка больше нет: щелчок по строке выбирает совет, и он
+-- открывается в карточке справа (ns.Detail) - полный текст и одна кнопка
+-- действия. Проверки, которые раньше нажимали кнопку в строке, делают то же,
+-- что игрок: щёлкают по строке и нажимают кнопку в карточке.
+
+-- Щёлкнуть по строке. Возвращает карточку совета справа.
+function S.pick(ns, row)
+    local click = row.__scripts and row.__scripts.OnClick
+    if click then click(row, "LeftButton") end
+    return ns.Detail
+end
+
+-- Кнопка действия выбранного совета - если она нарисована. Иначе nil.
+function S.actionOf(ns, row)
+    local detail = S.pick(ns, row)
+    local btn = detail and detail.action
+    if btn and btn.__shown and detail.card == row.card then return btn end
+    return nil
 end
 
 -- ГЕОМЕТРИЯ ПО ПРИВЯЗКАМ ------------------------------------------------
@@ -439,8 +516,10 @@ function S.sizeOf(el)
     local w = tonumber(el.__width) or 0
     local h = tonumber(el.__height) or 0
     if el.__type == "FontString" then
+        -- Высота не задана - значит, «сама по тексту»: у строки с заданной
+        -- шириной это столько строк, сколько вышло после переноса.
+        if h <= 0 then h = (w > 0 and el.GetStringHeight) and el:GetStringHeight() or 12 end
         if w <= 0 then w = S.textWidth(S.plain(el.__text or "")) end
-        if h <= 0 then h = 12 end
     end
     return w, h
 end

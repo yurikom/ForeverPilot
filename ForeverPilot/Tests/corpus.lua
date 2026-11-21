@@ -728,13 +728,13 @@ local function measureNow(C2, env, S, state, into)
         width = tonumber(tab.frame.__width) or 0,
     }
 
-    -- 3. Строки карточек: что нарисовано, что было целиком, сколько места.
+    -- 3. Строки списка: что нарисовано, что было целиком, сколько места.
+    --    В строке заголовок и выгода; «почему» и «чего не хватает» стоят в
+    --    карточке совета справа - целиком (см. measureDetail ниже).
     for _, row in ipairs(ns.Card.pool) do
         if row.__shown and row.card then
             local card = row.card
-            local room = ns.Card.RoomFor(row, card,
-                row.action.__shown and true or false,
-                row.route.__shown and true or false)
+            local room = ns.Card.RoomFor(row, card)
             into.rows[#into.rows + 1] = {
                 state = state.name, card = card,
                 width = tonumber(row.__width) or 0,
@@ -742,16 +742,69 @@ local function measureNow(C2, env, S, state, into)
                     { name = "заголовок", drawn = S.plain(row.title:GetText() or ""),
                       full = S.plain(tostring(card.title or "")), room = room.title,
                       cut = (row.cut or {}).title },
-                    { name = "почему", drawn = S.plain(row.why:GetText() or ""),
-                      full = S.plain(tostring(card.why or "")), room = room.why,
-                      cut = (row.cut or {}).why },
-                    { name = "чего не хватает", drawn = S.plain(row.need:GetText() or ""),
-                      full = S.plain(tostring(card.need or "")), room = room.need,
-                      cut = (row.cut or {}).need },
+                    { name = "выгода", drawn = S.plain(row.benefit:GetText() or ""),
+                      full = S.plain(tostring(card.benefit or "")), room = room.benefit,
+                      cut = (row.cut or {}).benefit },
                 },
             }
         end
     end
+end
+
+-- КАРТОЧКА СОВЕТА СПРАВА ОТ СПИСКА - ДЛЯ КАЖДОГО СОВЕТА НА ЭКРАНЕ.
+--
+-- Щелчок по строке открывает совет в карточке: полный текст и одна кнопка.
+-- Здесь это делается для каждой строки по очереди, и собирается всё, что в
+-- карточке при этом стоит: текст (он идёт в общее собрание, под правила
+-- смысла), прямоугольники частей (под правило «ничто ни на что не налезает») и
+-- то, что нарисовано целиком, рядом с тем, что должно было быть.
+local function measureDetail(C2, env, S, state, into, add)
+    local ns = env.ns
+    local detail = ns.Detail
+    if not (detail and detail.frame and ns.TabNow and ns.TabNow.frame) then return end
+    local rows = {}
+    for _, row in ipairs(ns.Card.pool) do
+        if row.__shown and row.card then rows[#rows + 1] = row end
+    end
+    local first = rows[1] and rows[1].card
+    for _, row in ipairs(rows) do
+        local card = row.card
+        S.pick(ns, row)
+        local where = state.name .. " / карточка совета «" .. tostring(card.title) .. "»"
+        local labels, texts = S.harvest(env.world, detail.frame)
+        for _, l in ipairs(labels) do add(l, "label", where, card) end
+        for _, t in ipairs(texts) do add(t, "screen", where, card) end
+        local parts = {}
+        local function part(name, el, full)
+            if not (el and el.__shown) then return end
+            parts[#parts + 1] = {
+                name = name, rect = S.rectOf(el, detail.frame),
+                drawn = (el.__type == "FontString") and S.plain(el.__text or "") or nil,
+                full = full and S.plain(tostring(full)) or nil,
+            }
+        end
+        part("вид совета", detail.kind)
+        part("иконка", detail.iconHit)
+        part("название", detail.title, card.title)
+        part("выгода", detail.benefit, card.benefit)
+        part("достоверность", detail.badge)
+        part("почему", detail.why, card.why)
+        part("чего не хватает", detail.need, card.need)
+        part("подробности", detail.facts)
+        part("что сделать самому", detail.note)
+        part("место в списке", detail.place)
+        part("кнопка действия", detail.action)
+        part("кнопка пути", detail.route)
+        into.details[#into.details + 1] = {
+            state = state.name, card = card, parts = parts, picked = detail.card == card,
+            width = tonumber(detail.frame.__width) or 0,
+            height = tonumber(detail.frame.__height) or 0,
+            labels = labels, texts = texts,
+            action = detail.action.__shown and S.plain(detail.action.text.__text or "") or nil,
+        }
+    end
+    -- Вернуть выбор туда, где он был: дальше экран читают другие сборщики.
+    if first then ns.TabNow:SelectCard(first) end
 end
 
 -- opts.states - список состояний (по умолчанию C.STATES)
@@ -766,6 +819,7 @@ function C.build(H, S, opts)
         strips = {},    -- { state, shown, text, lines, width, room, details }
         bands = {},     -- { state, width, bands = { { name, rect } } }
         rows = {},      -- { state, card, width, lines = { { name, drawn, full, room } } }
+        details = {},   -- { state, card, parts = { { name, rect, drawn, full } }, action }
         states = {},
         hovered = 0,
     }
@@ -825,7 +879,10 @@ function C.build(H, S, opts)
                 state = state.name, tab = def.key, where = where,
                 labels = labels, texts = texts, kinds = kinds,
             }
-            if def.key == "NOW" then measureNow(C, env, S, state, corpus) end
+            if def.key == "NOW" then
+                measureNow(C, env, S, state, corpus)
+                measureDetail(C, env, S, state, corpus, add)
+            end
             local tips = {}
             corpus.hovered = corpus.hovered + hoverAll(env, S, tips, where .. " / подсказка")
             for _, t in ipairs(tips) do add(t.text, t.channel, t.where) end
@@ -914,29 +971,26 @@ function C.build(H, S, opts)
             local live = nsr.Card.LiveAction and nsr.Card.LiveAction(card) or nil
             local liveKind = (live and live.kind) or act.kind
             local liveLabel = (live and live.label) or act.label
+            -- ЩЕЛЧОК ПО СТРОКЕ ВЫБИРАЕТ СОВЕТ, КНОПКА - В КАРТОЧКЕ СПРАВА.
+            --
+            -- Так теперь действует игрок, так же действует и проверка: щелчок
+            -- по строке, потом кнопка карточки, если она нарисована. Если
+            -- кнопки нет (у советов про рецепт её нет вовсе: открыть окно
+            -- профессий игра аддонам запрещает), ответ игроку стоит словами в
+            -- самой карточке - и он собран выше, в measureDetail.
+            --
+            -- Выбор идёт ДО снимка мира: «что изменилось» - это про нажатие
+            -- кнопки, а не про то, какой совет открыт справа.
+            local ok, err = pcall(S.pick, nsr, row)
+            local button = ok and S.actionOf(nsr, row) or nil
+            local shown = button ~= nil
+            local handler = button and button.__scripts and button.__scripts.OnClick
             env.said = {}
             nsr.Api.lastSaid = nil            -- каждое нажатие слушаем с чистого листа
             local before = C.signature(env, S)
             local callsBefore = #(env.openRecipeCalls or {})
-            local shown = row.action and row.action.__shown
-            local handler = shown and row.action.__scripts and row.action.__scripts.OnClick
-            local ok, err = true, nil
             if handler then
-                ok, err = pcall(handler, row.action)
-            else
-                -- КНОПКИ НЕТ - НАЖИМАЕМ САМУ КАРТОЧКУ, и это не придирка.
-                --
-                -- У советов про рецепт кнопки нет вовсе: открыть окно
-                -- профессий игра аддонам запрещает. Весь ответ игроку - в
-                -- щелчке по самой карточке («откройте такую-то профессию и
-                -- найдите такой-то рецепт»), и если его сюда не собрать, этот
-                -- текст не увидит ни одно правило смысла: он нигде больше не
-                -- появляется.
-                local rowHandler = row.__scripts and row.__scripts.OnClick
-                if rowHandler then
-                    handler = rowHandler
-                    ok, err = pcall(rowHandler, row, "LeftButton")
-                end
+                ok, err = pcall(handler, button)
             end
             local said = {}
             for _, line in ipairs(env.said) do

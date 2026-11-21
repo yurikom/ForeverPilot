@@ -1,8 +1,17 @@
 -- ForeverPilot / UI/TabNow.lua
 --
--- The default tab. Zero clicks to an answer: the four priority profiles sit
--- directly above the list, the filter chips sit under them, and the list itself
--- is one ranked pile of cards of every kind.
+-- Раздел «Советы» - первый экран окна. Три колонки, как в большом окне Polestar
+-- (игрок попросил сделать так же, 2026-11-21: «непонятно, на какую кнопку что,
+-- куда нажимать»):
+--
+--   слева   - профиль (что важнее) и категории советов со счётчиками;
+--   в центре - шапка с названием категории и сам список, по разделам;
+--   справа  - карточка выбранного совета: полный текст и ОДНА золотая кнопка.
+--
+-- В строке списка - только что сделать и что это даст; кнопок в строках нет.
+-- Щелчок по строке выбирает совет, и всё остальное - почему, чего не хватает,
+-- что нажать - стоит в карточке справа. Первый совет выбран сразу: ответ
+-- по-прежнему виден без единого щелчка.
 local ADDON, ns = ...
 
 local U = ns.Util
@@ -12,92 +21,537 @@ local Card = ns.Card
 local Tab = {}
 ns.TabNow = Tab
 
--- РАЗМЕТКА ШАПКИ, ЧИСЛАМИ В ОДНОМ МЕСТЕ ----------------------------------
+-- РАЗМЕТКА, ЧИСЛАМИ В ОДНОМ МЕСТЕ ---------------------------------------
 --
--- Игрок прислал скриншот, на котором кнопка фильтра «Золото» НАРИСОВАНА ПОВЕРХ
--- строки «75 рецептов известно • материалы по советам: 4з 34с»: строка с
--- числами стояла в одном ряду с кнопками фильтров и в этот ряд не умещалась.
---
--- Причина была в том, что ряд и строка делили одну полосу по горизонтали
--- ВСЛЕПУЮ: кнопки растут слева направо по своей ширине (а она зависит от
--- длины подписи и от шрифта клиента), строка прижата к правому краю и растёт
--- справа налево по длине текста. Ни одна из сторон не знала про другую, и
--- пересечение было вопросом длины слов.
---
--- Теперь каждая полоса своя, и считаются они одна из другой - как в
--- UI/Card.lua. Поделить полосу с кем-то ряд кнопок больше не может: под ним
--- нет никого, а проверка в Tests/test_nonsense.lua считает прямоугольники по
--- привязкам во всех состояниях мира и требует, чтобы полосы не пересекались.
+-- Игрок присылал скриншот, на котором кнопка фильтра была нарисована ПОВЕРХ
+-- строки с числами: два элемента делили одну полосу вслепую. С тех пор каждая
+-- полоса своя, числа названы здесь, а Tests/test_nonsense.lua считает
+-- прямоугольники по привязкам и требует, чтобы они не пересекались.
 Tab.PAD = 12
+Tab.SIDE_W = 170             -- левая колонка: профиль и категории
+Tab.DETAIL_W = 280           -- правая колонка: карточка совета
+Tab.MAIN_MIN = 240           -- меньше этого список не сжимается
+Tab.BAND_H = 62              -- шапка над списком
+Tab.LIST_TOP = Tab.BAND_H + 6
+Tab.LIST_SIDE = 8            -- список от краёв своей колонки
+Tab.SCROLLBAR_W = 22
 Tab.LABEL_H = 12             -- строка мелкого шрифта
-Tab.PROFILE_H = 24           -- высота кнопки профиля
-Tab.CHIP_H = 20              -- высота кнопки фильтра
-Tab.GAP = 6
-Tab.PROFILE_TOP = Tab.PAD + 18                                   -- 30
-Tab.CHIPS_TOP = Tab.PROFILE_TOP + Tab.PROFILE_H + Tab.GAP        -- 60
-Tab.STATS_TOP = Tab.CHIPS_TOP + Tab.CHIP_H + 4                   -- 84
-Tab.LIST_TOP = Tab.STATS_TOP + Tab.LABEL_H + Tab.GAP             -- 102
+Tab.NAV_H = 22               -- строка левой колонки
+Tab.SIDE_TOP = 48            -- первая подпись левой колонки, под названием аддона
+Tab.SECTION_H = 22           -- заголовок раздела в списке
 Tab.STRIP_H = 14             -- строка над списком: ровно одна
 
 -- Подпись к строке над списком и путь к подробностям - словами, в одном месте.
 Tab.STRIP_TITLE = "Что не показано и почему"
 Tab.DETAILS_HINT = "Подробнее — наведите мышь."
 
+-- Название категории в шапке. В левой колонке стоит короткое (ns.CHIP_LABEL).
+Tab.HEADING = { ALL = "Все советы" }
+
+-- Ширины колонок по ширине вкладки. Одна функция на код и на проверки: числа
+-- разметки не повторяются в двух местах (Tests/uistub.lua, S.layout).
+function Tab.Columns(width)
+    width = tonumber(width) or 0
+    local main = math.max(Tab.MAIN_MIN, width - Tab.SIDE_W - Tab.DETAIL_W)
+    return {
+        side = Tab.SIDE_W, main = main, detail = Tab.DETAIL_W,
+        list = main - Tab.LIST_SIDE - (Tab.LIST_SIDE + Tab.SCROLLBAR_W),
+    }
+end
+
+-- КАРТОЧКА ВЫБРАННОГО СОВЕТА (правая колонка) ----------------------------
+--
+-- Здесь совет стоит целиком: название, что это даст, почему, чего не хватает,
+-- материалы - всё с переносом строк и без обрезки. И здесь же единственная
+-- кнопка действия на всём экране - золотая. Если кнопки у совета нет (игра не
+-- даёт аддонам открывать окно профессии), на её месте словами сказано, что
+-- сделать самому.
+--
+-- Живёт в этом же файле, а не в отдельном: новый файл клиент видит только
+-- после полного перезапуска игры, а не после /reload.
+local Detail = {}
+ns.Detail = Detail
+
+Detail.PAD = 16
+Detail.ICON = 36
+Detail.BUTTON_H = 28
+Detail.LINE_H = 12
+Detail.TITLE_LINE_H = 14
+Detail.HEAD_TOP = 14         -- строка «вид совета» от верхнего края
+Detail.CLOSE_ROOM = 30       -- справа вверху стоит крестик окна
+
+Detail.EMPTY_TITLE = "Совет не выбран"
+Detail.EMPTY_BODY = "Выберите совет в списке — здесь будет, что делать."
+Detail.NO_CARDS_BODY = "Под этот фильтр не попал ни один совет. Выберите другой слева."
+Detail.MORE_FACTS = "Остальное — под курсором: наведите мышь на этот совет в списке."
+
+function Detail:Build(parent)
+    if self.frame then return self.frame end
+    local T = W.THEME
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetAllPoints(parent)
+    self.frame = f
+
+    self.kind = W.Label(f, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+    self.kind:SetWordWrap(false)
+
+    -- Иконка под курсором показывает игровую подсказку самого предмета.
+    local iconHit = CreateFrame("Frame", nil, f)
+    iconHit:SetSize(Detail.ICON, Detail.ICON)
+    iconHit:EnableMouse(true)
+    local icon = iconHit:CreateTexture(nil, "ARTWORK")
+    icon:SetAllPoints(iconHit)
+    icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    iconHit:SetScript("OnEnter", function(self2)
+        local card = Detail.card
+        if card and card.link then W.ShowItemTip(self2, card.link, nil) end
+    end)
+    iconHit:SetScript("OnLeave", W.HideTip)
+    self.iconHit, self.icon = iconHit, icon
+
+    self.title = W.Label(f, "", W.FONT_NORMAL, T.text[1], T.text[2], T.text[3])
+    self.benefit = W.Label(f, "", W.FONT_NORMAL)
+    self.badge = W.ConfBadge(f, ns.CONF.UNKNOWN)
+    self.state = W.Label(f, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+    self.meter = W.Meter(f, 54, 4)
+
+    local rule = f:CreateTexture(nil, "BORDER")
+    W.Paint(rule, T.line)
+    rule:SetHeight(1)
+    self.rule = rule
+
+    self.why = W.Label(f, "", W.FONT_SMALL, T.dim[1], T.dim[2], T.dim[3])
+    self.need = W.Label(f, "", W.FONT_SMALL)
+    self.facts = W.Label(f, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+    self.note = W.Label(f, "", W.FONT_SMALL, 1.00, 0.80, 0.40)
+    self.place = W.Label(f, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+
+    -- ГЛАВНАЯ КНОПКА. Что на ней написано и что она делает, решает
+    -- Card.LiveAction в момент показа: у аукциона это «Искать на аукционе»,
+    -- у рецепта - «Показать в профессии».
+    self.action = W.Button(f, "", 120, Detail.BUTTON_H, function()
+        if Detail.card then Card.Activate(Detail.card) end
+    end)
+    self.action:SetPrimary(true)
+    self.action:SetScript("OnEnter", function(self2)
+        self2:Repaint(true)
+        local title, body = Card.ActionTip(Detail.card)
+        if title then W.ShowTip(self2, title, body) end
+    end)
+    self.action:SetScript("OnLeave", function(self2)
+        self2:Repaint(false)
+        W.HideTip()
+    end)
+
+    self.route = W.Button(f, "Показать путь", 110, Detail.BUTTON_H, function()
+        if Detail.card then Card.Route(Detail.card) end
+    end)
+    self.route:SetScript("OnEnter", function(self2)
+        self2:Repaint(true)
+        local card = Detail.card
+        W.ShowTip(self2, "Показать путь", {
+            (card and card.place and ns.Places:Describe(card.place)) or "",
+            "Поставлю метку на карте и стрелку на экране.",
+            "Иду я туда не сам — идёте вы.",
+        })
+    end)
+    self.route:SetScript("OnLeave", function(self2)
+        self2:Repaint(false)
+        W.HideTip()
+    end)
+
+    self.emptyTitle = W.Label(f, "", W.FONT_NORMAL, T.dim[1], T.dim[2], T.dim[3])
+    self.emptyBody = W.Label(f, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+    self:Show(nil)
+    return f
+end
+
+-- Всё, что рисуется только при выбранном совете.
+function Detail:Parts()
+    return { self.kind, self.iconHit, self.title, self.benefit, self.badge,
+             self.state, self.meter, self.rule, self.why, self.need, self.facts,
+             self.note, self.place, self.action, self.route }
+end
+
+-- Ширина карточки задана числом, высота - по окну (Main:HostNow): обе известны
+-- сразу, без ожидания, пока клиент разложит вложенные рамки.
+function Detail:Size()
+    local _, height = ns.MainFrame:HostNow()
+    return Tab.DETAIL_W, height
+end
+
+function Detail:ShowEmpty(body)
+    local f = self.frame
+    if not f then return end
+    for _, el in ipairs(self:Parts()) do el:Hide() end
+    local P = Detail.PAD
+    local width = self:Size()
+    local inner = width - 2 * P
+    self.emptyTitle:ClearAllPoints()
+    self.emptyTitle:SetPoint("TOPLEFT", f, "TOPLEFT", P, -(Detail.HEAD_TOP + 22))
+    self.emptyTitle:SetText(Detail.EMPTY_TITLE)
+    self.emptyTitle:Show()
+    W.SetWrapped(self.emptyBody, body or Detail.EMPTY_BODY, inner, Detail.LINE_H)
+    self.emptyBody:ClearAllPoints()
+    self.emptyBody:SetPoint("TOPLEFT", f, "TOPLEFT", P, -(Detail.HEAD_TOP + 22 + 20))
+    self.emptyBody:Show()
+end
+
+-- Сколько строк текста займёт фраза при такой ширине. Нужна, чтобы решить,
+-- сколько строк подробностей влезет, ДО того как их ставить.
+local function linesFor(text, width)
+    local n = math.ceil(U.charLen(tostring(text)) * 6 / math.max(1, width * 0.9))
+    return math.max(1, n)
+end
+
+function Detail:Show(card, emptyBody)
+    self.card = card
+    local f = self.frame
+    if not f then return end
+    if not card then return self:ShowEmpty(emptyBody) end
+    self.emptyTitle:Hide()
+    self.emptyBody:Hide()
+
+    local T = W.THEME
+    local P = Detail.PAD
+    local width, height = self:Size()
+    local inner = width - 2 * P
+
+    local function put(el, x, y)
+        el:ClearAllPoints()
+        el:SetPoint("TOPLEFT", f, "TOPLEFT", x, -y)
+        el:Show()
+    end
+
+    -- НИЗ: кнопки, над ними - место совета в общем списке, ещё выше - что
+    -- делать, если кнопки нет. Считается первым: тексту сверху достаётся то,
+    -- что осталось.
+    local showAction = not (card.action and card.action.kind == "noop")
+        and Card.ActionReady(card)
+    local canRoute = card.place and card.place.routable and ns.Places:CanRoute()
+    local bottom = P
+    self.action:ClearAllPoints()
+    self.route:ClearAllPoints()
+    self.action:SetLabel(Card.ActionLabel(card))
+    if showAction and canRoute then
+        local rw = math.floor((inner - 8) * 0.42)
+        self.route:SetSize(rw, Detail.BUTTON_H)
+        self.route:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", P, P)
+        self.route:SetPrimary(false)
+        self.action:SetSize(inner - 8 - rw, Detail.BUTTON_H)
+        self.action:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", P + rw + 8, P)
+        self.route:Show()
+        self.action:Show()
+    elseif showAction then
+        self.action:SetSize(inner, Detail.BUTTON_H)
+        self.action:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", P, P)
+        self.action:Show()
+        self.route:Hide()
+    elseif canRoute then
+        -- Единственное, что здесь можно нажать, и есть главное действие.
+        self.route:SetSize(inner, Detail.BUTTON_H)
+        self.route:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", P, P)
+        self.route:SetPrimary(true)
+        self.route:Show()
+        self.action:Hide()
+    else
+        self.action:Hide()
+        self.route:Hide()
+    end
+    if showAction or canRoute then bottom = bottom + Detail.BUTTON_H + 10 end
+
+    local place = Card.PlaceLine(card)
+    if place then
+        local ph = W.SetWrapped(self.place, place, inner, Detail.LINE_H)
+        self.place:ClearAllPoints()
+        self.place:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", P, bottom)
+        self.place:Show()
+        bottom = bottom + ph + 8
+    else
+        self.place:Hide()
+    end
+
+    -- КНОПКИ НЕТ - НА ЕЁ МЕСТЕ СКАЗАНО, ЧТО СДЕЛАТЬ САМОМУ: какую профессию
+    -- открыть и что в ней найти (Card.ActionNoteShort). Одной фразой и про
+    -- этот рецепт; длинное объяснение, почему кнопки нет, сюда не идёт - игрок
+    -- просил его убрать с глаз, и оно осталось в подсказке панели.
+    local note = Card.ActionNoteShort(card)
+    if note and note ~= "" then
+        local nh = W.SetWrapped(self.note, note, inner, Detail.LINE_H)
+        self.note:ClearAllPoints()
+        self.note:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", P, bottom)
+        self.note:Show()
+        bottom = bottom + nh + 10
+    else
+        self.note:Hide()
+    end
+    local limit = height - bottom
+
+    -- ВЕРХ: вид совета, иконка с названием, выгода, достоверность.
+    local y = Detail.HEAD_TOP
+    W.SetFitted(self.kind, ns.KIND_LABEL[card.kind] or "", inner - Detail.CLOSE_ROOM)
+    put(self.kind, P, y)
+    y = y + Detail.LINE_H + 10
+
+    self.icon:SetTexture(card.icon or ns.KIND_ICON[card.kind]
+        or "Interface\\Icons\\INV_Misc_QuestionMark")
+    put(self.iconHit, P, y)
+    if card.pinTop then
+        self.title:SetTextColor(1, 0.86, 0.55)
+    else
+        self.title:SetTextColor(T.text[1], T.text[2], T.text[3])
+    end
+    local th = W.SetWrapped(self.title, card.title or "", inner - Detail.ICON - 10,
+        Detail.TITLE_LINE_H)
+    put(self.title, P + Detail.ICON + 10, y)
+    y = y + math.max(Detail.ICON, th) + 10
+
+    local benefit = tostring(card.benefit or "")
+    if benefit ~= "" then
+        local bc = W.benefitColor(card.benefitKind)
+        self.benefit:SetTextColor(bc[1], bc[2], bc[3])
+        local bh = W.SetWrapped(self.benefit, benefit, inner, Detail.TITLE_LINE_H)
+        put(self.benefit, P, y)
+        y = y + bh + 8
+    else
+        self.benefit:Hide()
+    end
+
+    self.badge:Set(card.conf)
+    put(self.badge, P, y)
+    if card.plan then
+        local done = card.plan.ready and (card.plan.readiness or 1) >= 1
+        self.state:SetText(done and "всё есть" or "готовность")
+        if done then
+            self.state:SetTextColor(0.50, 0.85, 0.55)
+        else
+            self.state:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
+        end
+        self.state:ClearAllPoints()
+        self.state:SetPoint("LEFT", self.badge, "RIGHT", 10, 0)
+        self.state:Show()
+        self.meter:SetValue(card.plan.readiness or 0)
+        self.meter:ClearAllPoints()
+        self.meter:SetPoint("LEFT", self.state, "RIGHT", 8, 0)
+        self.meter:Show()
+    else
+        self.state:Hide()
+        self.meter:Hide()
+    end
+    y = y + 14 + 10
+
+    self.rule:SetWidth(inner)
+    put(self.rule, P, y)
+    y = y + 1 + 10
+
+    -- ТЕКСТ: почему, чего не хватает, подробности - с переносом и целиком.
+    --
+    -- Если окно низкое и всё не поместилось, место делится по важности: сначала
+    -- «чего не хватает» (это то, что делать), потом «почему», и что осталось -
+    -- подробностям. Обрезанное не налезает на кнопку, а про то, где прочитать
+    -- остальное, сказано словами.
+    local line = Detail.LINE_H
+    local function whole(h) return math.floor(h / line) * line end
+    local whyText, needText = tostring(card.why or ""), tostring(card.need or "")
+    local cut = false
+
+    local needH = (needText ~= "") and W.SetWrapped(self.need, needText, inner, line) or 0
+    local needKeep = math.min(needH, line * 5)
+    local whyRoom = (limit - y) - ((needKeep > 0) and (needKeep + 10) or 0)
+    -- Строка «где прочитать остальное»: если текст придётся резать, место под
+    -- неё отнимается у него же - обрезать и не сказать, где целое, нельзя.
+    local pointerH = linesFor(Detail.MORE_FACTS, inner) * line
+    if whyText ~= "" and whyRoom >= line then
+        local h = W.SetWrapped(self.why, whyText, inner, line)
+        if h > whyRoom then
+            h = whole(math.max(line, whyRoom - pointerH - 8))
+            self.why:SetHeight(h)
+            cut = true
+        end
+        put(self.why, P, y)
+        y = y + h + 8
+    else
+        self.why:Hide()
+        if whyText ~= "" then cut = true end
+    end
+
+    local ready = card.plan and card.plan.ready
+    if ready then
+        self.need:SetTextColor(0.50, 0.85, 0.55)
+    elseif card.kind == ns.KIND.SETUP then
+        self.need:SetTextColor(1.00, 0.80, 0.40)
+    else
+        self.need:SetTextColor(0.85, 0.72, 0.45)
+    end
+    if needText ~= "" and (limit - y) >= line then
+        local h = needH
+        if h > limit - y then
+            h = whole(limit - y)
+            self.need:SetHeight(h)
+            cut = true
+        end
+        put(self.need, P, y)
+        y = y + h + 10
+    else
+        self.need:Hide()
+        if needText ~= "" then cut = true end
+    end
+
+    -- Подробности: столько строк, сколько влезает. Остальное - в подсказке
+    -- строки списка, и об этом сказано словами.
+    local facts = Card.FactLines(card, true)
+    local fit, used = {}, 0
+    local room = limit - y
+    if not cut then
+        for i, fact in ipairs(facts) do
+            local h = linesFor(fact, inner) * line
+            local reserve = (i < #facts) and pointerH or 0
+            if used + h + reserve > room then break end
+            fit[#fit + 1] = fact
+            used = used + h
+        end
+    end
+    if (cut or #fit < #facts) and room >= pointerH then
+        fit[#fit + 1] = Detail.MORE_FACTS
+    end
+    local factsText = table.concat(fit, "\n")
+    if factsText ~= "" and room >= line then
+        local h = W.SetWrapped(self.facts, factsText, inner, line)
+        if h > room then
+            h = whole(room)
+            self.facts:SetHeight(h)
+        end
+        put(self.facts, P, y)
+        y = y + h + 8
+    else
+        self.facts:Hide()
+    end
+end
+
 function Tab:Build(parent)
     if self.frame then return self.frame end
+    local T = W.THEME
     local frame = CreateFrame("Frame", nil, parent)
     frame:SetAllPoints(parent)
     self.frame = frame
 
-    -- Profile row: four buttons above the list, not buried in settings.
-    local profileLabel = W.Label(frame, "Что для вас сейчас важнее:", W.FONT_SMALL, 0.62, 0.62, 0.62)
-    profileLabel:SetPoint("TOPLEFT", Tab.PAD, -Tab.PAD)
+    -- ЛЕВАЯ КОЛОНКА: что важнее и категории ----------------------------------
+    local side = CreateFrame("Frame", nil, frame)
+    side:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+    side:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+    side:SetWidth(Tab.SIDE_W)
+    W.Ground(side, T.side)
+    W.Hairline(side, "RIGHT")
+    self.side = side
+
+    local mark = W.Label(side, "ForeverPilot", W.FONT_TITLE,
+        T.accent[1], T.accent[2], T.accent[3])
+    mark:SetPoint("TOPLEFT", side, "TOPLEFT", 14, -14)
+    self.wordmark = mark
+
+    local y = Tab.SIDE_TOP
+    -- Профиль - это не настройка, а первый вопрос: от него зависит порядок
+    -- всего списка. Поэтому он здесь, на виду, а не в настройках.
+    local profileLabel = W.Label(side, "Профиль: что важнее", W.FONT_SMALL,
+        T.muted[1], T.muted[2], T.muted[3])
+    profileLabel:SetPoint("TOPLEFT", side, "TOPLEFT", 14, -y)
     self.profileLabel = profileLabel
+    y = y + Tab.LABEL_H + 6
 
     self.profileChips = {}
-    local x = Tab.PAD
     for _, key in ipairs(ns.PROFILE_ORDER) do
-        local chip = W.Chip(frame, ns.PROFILE_LABEL[key], function()
+        local row = W.NavRow(side, ns.PROFILE_LABEL[key], function()
             ns.Config:SetProfile(key)
             Tab:SyncProfiles()
             -- Жест игрока в самом окне: не откладывается ни на бегу, ни по
             -- «недавно считали» (Main:ShouldDefer, причина opened).
             ns.MainFrame:Rebuild(false, { opened = true })
-        end, Tab.PROFILE_H)
-        chip:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -Tab.PROFILE_TOP)
-        chip.tooltipTitle = ns.PROFILE_LABEL[key]
-        chip.tooltipText = ns.PROFILE_TIP[key]
-        x = x + chip:GetWidth() + 6
-        self.profileChips[key] = chip
+        end, Tab.NAV_H)
+        row:SetWidth(Tab.SIDE_W - 1)
+        row:SetPoint("TOPLEFT", side, "TOPLEFT", 0, -y)
+        row.tooltipTitle = ns.PROFILE_LABEL[key]
+        row.tooltipText = ns.PROFILE_TIP[key]
+        y = y + Tab.NAV_H
+        self.profileChips[key] = row
     end
 
-    -- Filter chips: the same list, narrowed. "Золото" and "Крафт" are chips,
-    -- not tabs, so the ranking stays shared.
+    -- Фильтр: тот же список, суженный. Число справа - сколько советов внутри;
+    -- пустой фильтр виден сразу, ещё до щелчка.
+    y = y + 12
+    local filterLabel = W.Label(side, "Фильтр", W.FONT_SMALL,
+        T.muted[1], T.muted[2], T.muted[3])
+    filterLabel:SetPoint("TOPLEFT", side, "TOPLEFT", 14, -y)
+    self.filterLabel = filterLabel
+    y = y + Tab.LABEL_H + 6
+
     self.filterChips = {}
-    local fx = Tab.PAD
     for _, key in ipairs(ns.CHIP_ORDER) do
-        local chip = W.Chip(frame, ns.CHIP_LABEL[key], function()
+        local row = W.NavRow(side, ns.CHIP_LABEL[key], function()
             ns.Config:SetChip(key)
             Tab:SyncChips()
             Tab:Render()
-        end, Tab.CHIP_H)
-        chip:SetPoint("TOPLEFT", frame, "TOPLEFT", fx, -Tab.CHIPS_TOP)
-        fx = fx + chip:GetWidth() + 5
-        self.filterChips[key] = chip
+        end, Tab.NAV_H)
+        row:SetWidth(Tab.SIDE_W - 1)
+        row:SetPoint("TOPLEFT", side, "TOPLEFT", 0, -y)
+        y = y + Tab.NAV_H
+        self.filterChips[key] = row
     end
+    Tab.SIDE_USED = y
 
-    -- Строка статистики - своей полосой под кнопками, а не рядом с ними.
-    self.summary = W.Label(frame, "", W.FONT_SMALL, 0.55, 0.55, 0.55)
-    self.summary:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -Tab.PAD, -Tab.STATS_TOP)
-    self.summary:SetJustifyH("RIGHT")
+    local version = W.Label(side, "версия " .. tostring(ns.VERSION or "?"), W.FONT_SMALL,
+        T.muted[1], T.muted[2], T.muted[3])
+    version:SetPoint("BOTTOMLEFT", side, "BOTTOMLEFT", 14, 10)
+    self.version = version
+
+    -- СРЕДНЯЯ КОЛОНКА: шапка и список ----------------------------------------
+    local mainCol = CreateFrame("Frame", nil, frame)
+    mainCol:SetPoint("TOPLEFT", frame, "TOPLEFT", Tab.SIDE_W, 0)
+    mainCol:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -Tab.DETAIL_W, 0)
+    self.mainCol = mainCol
+
+    local band = CreateFrame("Frame", nil, mainCol)
+    band:SetPoint("TOPLEFT", mainCol, "TOPLEFT", 0, 0)
+    band:SetPoint("TOPRIGHT", mainCol, "TOPRIGHT", 0, 0)
+    band:SetHeight(Tab.BAND_H)
+    W.Ground(band, T.band)
+    W.Hairline(band, "BOTTOM")
+    self.band = band
+
+    self.heading = W.Label(band, "", W.FONT_TITLE, T.text[1], T.text[2], T.text[3])
+    self.heading:SetPoint("TOPLEFT", band, "TOPLEFT", 16, -12)
+
+    -- Строка с числами - подзаголовком в шапке, своей полосой.
+    self.summary = W.Label(band, "", W.FONT_SMALL, T.dim[1], T.dim[2], T.dim[3])
+    self.summary:SetPoint("TOPLEFT", band, "TOPLEFT", 16, -40)
+    self.summary:SetJustifyH("LEFT")
     self.summary:SetWordWrap(false)
 
-    local scroll, content = W.ScrollArea(frame)
-    scroll:SetPoint("TOPLEFT", Tab.PAD, -Tab.LIST_TOP)
-    scroll:SetPoint("BOTTOMRIGHT", -(Tab.PAD + 22), Tab.PAD)
+    -- Скрытые советы возвращаются одной кнопкой - и она есть только тогда,
+    -- когда есть что возвращать.
+    local hidden = W.Button(band, Tab.RESTORE_LABEL, 118, 18, function()
+        Card.RestoreHidden()
+    end)
+    hidden:SetPoint("TOPRIGHT", band, "TOPRIGHT", -12, -12)
+    hidden:SetScript("OnEnter", function(self2)
+        self2:Repaint(true)
+        W.ShowTip(self2, Tab.RESTORE_LABEL, {
+            "Вы прятали советы правым щелчком. Эта кнопка возвращает их все.",
+        })
+    end)
+    hidden:SetScript("OnLeave", function(self2)
+        self2:Repaint(false)
+        W.HideTip()
+    end)
+    hidden:Hide()
+    self.hiddenButton = hidden
+
+    local scroll, content = W.ScrollArea(mainCol)
+    scroll:SetPoint("TOPLEFT", mainCol, "TOPLEFT", Tab.LIST_SIDE, -Tab.LIST_TOP)
+    scroll:SetPoint("BOTTOMRIGHT", mainCol, "BOTTOMRIGHT",
+        -(Tab.LIST_SIDE + Tab.SCROLLBAR_W), Tab.LIST_SIDE)
     self.scroll, self.content = scroll, content
 
-    self.empty = W.EmptyState(frame,
+    self.empty = W.EmptyState(mainCol,
         "Пока советовать нечего",
         "Это не ошибка. Ниже написано, чего мне не хватает, чтобы начать.",
         nil, nil)
@@ -105,7 +559,7 @@ function Tab:Build(parent)
     self.empty:SetPoint("RIGHT", scroll, "RIGHT", -4, 0)
     self.empty:Hide()
 
-    -- A short list leaves most of a 560px window blank, and blank space answers
+    -- A short list leaves most of the window blank, and blank space answers
     -- nothing. The same per-branch report the empty state shows goes under the
     -- cards: four cards plus "why there are only four" is a more useful screen
     -- than four cards and a void. Parented to the scroll child so it scrolls
@@ -144,10 +598,27 @@ function Tab:Build(parent)
     strip:Hide()
     self.strip = strip
 
+    self.sections = {}
+
+    -- ПРАВАЯ КОЛОНКА: карточка выбранного совета ------------------------------
+    local pane = CreateFrame("Frame", nil, frame)
+    pane:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    pane:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+    pane:SetWidth(Tab.DETAIL_W)
+    W.Ground(pane, T.panel)
+    W.Hairline(pane, "LEFT")
+    self.pane = pane
+    Detail:Build(pane)
+
+    -- Щелчок по строке списка выбирает совет (UI/Card.lua, Card.Pick).
+    Card.OnPick = function(card) Tab:SelectCard(card) end
+
     Tab:SyncProfiles()
     Tab:SyncChips()
     return frame
 end
+
+Tab.RESTORE_LABEL = "Вернуть скрытые"
 
 function Tab:SyncProfiles()
     local active = ns.Config:Profile()
@@ -163,27 +634,98 @@ function Tab:SyncChips()
     end
 end
 
--- Render ----------------------------------------------------------------
+-- Заголовок раздела в списке: название вида советов и сколько их.
+function Tab:Section(index)
+    local sec = self.sections[index]
+    if sec then
+        sec:Show()
+        return sec
+    end
+    local T = W.THEME
+    sec = CreateFrame("Frame", nil, self.content)
+    sec:SetHeight(Tab.SECTION_H)
+    sec.text = W.Label(sec, "", W.FONT_SMALL, T.dim[1], T.dim[2], T.dim[3])
+    sec.text:SetPoint("BOTTOMLEFT", sec, "BOTTOMLEFT", 4, 5)
+    sec.text:SetJustifyH("LEFT")
+    sec.text:SetWordWrap(false)
+    sec.count = W.Label(sec, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
+    sec.count:SetPoint("BOTTOMRIGHT", sec, "BOTTOMRIGHT", -8, 5)
+    sec.count:SetJustifyH("RIGHT")
+    W.Hairline(sec, "BOTTOM")
+    self.sections[index] = sec
+    return sec
+end
+
+-- ВЫБОР СОВЕТА. Только подсветка строки и карточка справа: список при этом не
+-- пересчитывается и не перерисовывается.
+function Tab:SelectCard(card)
+    if not card then return end
+    self.selected, self.selectedKey = card, card.key
+    for _, row in ipairs(Card.pool) do
+        if row.card and row:IsShown() then
+            Card.SetSelected(row, row.card == card)
+        end
+    end
+    Detail:Show(card)
+end
+
+-- Какой совет выбран после перерисовки: тот же, что был (по ключу - сами
+-- карточки при пересчёте создаются заново), а если его больше нет - первый.
+function Tab:Chosen(cards)
+    local key = self.selectedKey
+    if key ~= nil then
+        for _, card in ipairs(cards) do
+            if card.key == key then return card end
+        end
+    end
+    return cards[1]
+end
+
+-- ОКНО ОТКРЫЛИ, А ПОД ЗАПОМНЕННЫЙ ФИЛЬТР НЕ ПОПАЛО НИЧЕГО. Игрок прислал
+-- именно такой скриншот: «Можно сейчас», ноль советов - и остальные 21 где-то
+-- рядом. При открытии окна пустой фильтр заменяется на «Всё»; выбрать пустой
+-- руками по-прежнему можно - счётчик слева покажет ноль.
+function Tab:LeaveEmptyFilter()
+    local chip = ns.Config:Chip()
+    if chip == ns.CHIP.ALL then return false end
+    if #(ns.ActionEngine.cards or {}) == 0 then return false end
+    if #ns.ActionEngine:Filtered(chip) > 0 then return false end
+    ns.Config:SetChip(ns.CHIP.ALL)
+    self:SyncChips()
+    return true
+end
 
 function Tab:Render()
     if not self.frame then return end
+    local T = W.THEME
     local chip = ns.Config:Chip()
     local cards = ns.ActionEngine:Filtered(chip)
     local meta = ns.ActionEngine.meta or {}
+    local total = #(ns.ActionEngine.cards or {})
 
-    -- Ширина списка - то, по чему укорачиваются строки карточек. Ноль значит
-    -- «клиент ещё не разложил окно»: мерить нечем, и тогда берётся обычная
-    -- ширина окна, а не ноль - иначе от строк останутся огрызки.
-    local width = tonumber(self.scroll:GetWidth()) or 0
-    if width <= 0 then width = 640 end
+    -- Счётчики категорий и название выбранной - в шапке.
+    for key, row in pairs(self.filterChips or {}) do
+        local n = (key == chip) and #cards or #ns.ActionEngine:Filtered(key)
+        row:SetCount(n)
+        row:SetDim(n == 0)
+    end
+    self.heading:SetText(Tab.HEADING[chip] or ns.CHIP_LABEL[chip] or "")
+
+    -- Ширина списка считается от окна при каждой отрисовке: так список следует
+    -- за размером окна и не зависит от того, успел ли клиент разложить колонки.
+    local hostW, hostH = ns.MainFrame:HostNow()
+    local cols = Tab.Columns(hostW)
+    local width = cols.list
+    local listHeight = hostH - Tab.LIST_TOP - Tab.LIST_SIDE
     local y = 0
     local shown = 0
 
-    -- ЧТО НЕ ПОКАЗАНО - ОДНОЙ СТРОКОЙ, ДО СОВЕТОВ. Подробности - под курсором.
-    local total = #(ns.ActionEngine.cards or {})
+    -- Что скрыто и почему - ОДНОЙ строкой. Причины целиком лежат в подсказке
+    -- этой же строки: показать их нужно, а читать их каждый раз - нет.
     local notices = self:Notices(meta, chip, #cards, total, cards)
     local variants = self:NoticeShort(meta, chip, #cards, total)
     if #cards > 0 and #variants > 0 then
+        -- Строка стоит внутри списка с отступом 6 слева и столько же справа.
         local room = math.max(120, width - 12)
         self.strip:SetWidth(room)
         self.strip.details = notices
@@ -193,28 +735,55 @@ function Tab:Render()
         self.strip:Show()
         y = Tab.STRIP_H + 10
     else
-        -- Подробности живут ровно столько, сколько видна строка: иначе
-        -- подсказка переживёт сообщение, к которому относилась.
         self.strip.details = nil
         self.strip:Hide()
     end
 
-    for i, card in ipairs(cards) do
-        shown = shown + 1
-        local row = Card.Acquire(self.content, shown)
-        row:SetWidth(width)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", self.content, "TOPLEFT", 0, -y)
-        Card.Fill(row, card)
-        y = y + Card.HEIGHT + 4
+    -- РАЗДЕЛЫ: советы одного вида стоят вместе, под заголовком со счётчиком.
+    -- Порядок разделов - по лучшему совету в каждом, порядок внутри - тот, что
+    -- задал профиль. Самый важный совет по-прежнему стоит первым.
+    local order, groups = {}, {}
+    for _, card in ipairs(cards) do
+        local kind = card.kind or "?"
+        if not groups[kind] then
+            groups[kind] = {}
+            order[#order + 1] = kind
+        end
+        local g = groups[kind]
+        g[#g + 1] = card
+    end
+
+    local chosen = self:Chosen(cards)
+    self.selected, self.selectedKey = chosen, chosen and chosen.key or nil
+
+    local sections = 0
+    for _, kind in ipairs(order) do
+        local group = groups[kind]
+        sections = sections + 1
+        local sec = self:Section(sections)
+        sec:SetWidth(width)
+        sec:ClearAllPoints()
+        sec:SetPoint("TOPLEFT", self.content, "TOPLEFT", 0, -y)
+        sec.count:SetText(tostring(#group))
+        W.SetFitted(sec.text, ns.KIND_LABEL[kind] or "Прочее", math.max(60, width - 44))
+        y = y + Tab.SECTION_H
+        for _, card in ipairs(group) do
+            shown = shown + 1
+            local row = Card.Acquire(self.content, shown)
+            row:SetWidth(width)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", self.content, "TOPLEFT", 0, -y)
+            Card.Fill(row, card, card == chosen)
+            y = y + Card.HEIGHT
+        end
+        y = y + 8
     end
     Card.ReleaseFrom(shown + 1)
+    for i = sections + 1, #self.sections do self.sections[i]:Hide() end
 
-    -- Under the cards: what the silent branches were missing. Only when there
-    -- is something to say and the list did not already fill the window. Not
-    -- computed at all when the list is empty - the empty state below asks for
-    -- the same lines itself, and building them twice per render is waste.
-    local roomLeft = (self.scroll:GetHeight() or 400) - y
+    -- Under the cards: which branches produced nothing, and why. Only when
+    -- there is room and something to say - a full list needs no apology.
+    local roomLeft = listHeight - y
     local gaps = (shown > 0 and roomLeft > 90) and self:BranchGaps(meta) or {}
     if shown > 0 and #gaps > 0 and roomLeft > 90 then
         self.note.body:SetText(table.concat(gaps, "\n"))
@@ -234,23 +803,30 @@ function Tab:Render()
     if shown == 0 then
         self.empty:Show()
         local title, body = self:EmptyReason(meta, chip, #(ns.ActionEngine.cards or {}))
-        -- Над пустым списком полоски нет, а сказать то же самое надо: всё, что
-        -- не показано по причине, которую EmptyReason сама не называет.
+        -- Даже над пустым списком сказано, если что-то скрыто: молчаливо пустой
+        -- список - ровно тот случай, ради которого объявление и существует.
+        -- Здесь причины стоят целиком: читать больше нечего, и короткая строка
+        -- с отсылкой к подсказке была бы хуже прямого ответа.
         if #notices > 0 then
             body = tostring(body or "") .. "\n" .. table.concat(notices, "\n")
         end
         self.empty.title:SetText(title)
         self.empty.body:SetText(body)
-        -- The window is tall and the panel was a fixed 84px, so a body that
-        -- lists six branches was cut off halfway. Grow to fit what we wrote.
+        -- Причин бывает несколько строк: без подстройки высоты они вылезали бы
+        -- за рамку пустого состояния.
         local lines = 1
         for _ in tostring(body or ""):gmatch("\n") do lines = lines + 1 end
+        -- В узкой колонке строки ещё и переносятся.
+        lines = lines + math.ceil(U.charLen(tostring(body or "")) * 6 / math.max(120, width - 70))
         self.empty:SetHeight(math.max(84, 46 + lines * 15))
     else
         self.empty:Hide()
     end
 
-    -- The line on the right that says what this list is built on.
+    -- Что скрыто руками - возвращается кнопкой в шапке.
+    local hiddenCount = tonumber(meta.hiddenByDismissal) or 0
+    if hiddenCount > 0 then self.hiddenButton:Show() else self.hiddenButton:Hide() end
+
     local bits = {}
     bits[#bits + 1] = (meta.learnedRecipes or 0) .. " "
         .. U.plural(meta.learnedRecipes or 0, "рецепт", "рецепта", "рецептов") .. " известно"
@@ -262,8 +838,8 @@ function Tab:Render()
         -- материалов, которых не хватает на советы из списка, - то есть
         -- сколько придётся потратить, если делать всё, что я насоветовал.
         -- Так и сказано; «(неполная)» заменено на причину, а не на пометку.
-        local total, conf = meta.shoppingTotal, meta.shoppingConf
-        bits[#bits + 1] = "материалы по советам: " .. U.money(total)
+        local totalCost, conf = meta.shoppingTotal, meta.shoppingConf
+        bits[#bits + 1] = "материалы по советам: " .. U.money(totalCost)
             .. (conf == ns.CONF.UNKNOWN and " и больше (часть цен не знаю)" or "")
     end
     local ps = meta.priceSources
@@ -272,8 +848,8 @@ function Tab:Render()
     end
     -- Hidden cards are invisible by definition, so the count has to be said
     -- somewhere the player will see it without having to suspect anything.
-    if (meta.hiddenByDismissal or 0) > 0 then
-        bits[#bits + 1] = "скрыто " .. meta.hiddenByDismissal .. " (/fp show)"
+    if hiddenCount > 0 then
+        bits[#bits + 1] = "скрыто " .. hiddenCount .. " (/fp show)"
     end
     -- Строка статистики - тоже числа, и резать их нельзя. Варианты - это сама
     -- строка и её части с конца: ширину она делит только с отступами.
@@ -282,7 +858,15 @@ function Tab:Render()
         stats[#stats + 1] = table.concat(bits, "  •  ", 1, i)
             .. ((i < #bits) and ("  " .. U.MORE_MARK) or "")
     end
-    W.SetFittedFrom(self.summary, stats, math.max(120, width))
+    -- В шапке строка стоит своей полосой, под названием и под кнопкой возврата.
+    W.SetFittedFrom(self.summary, stats, math.max(120, cols.main - 32))
+
+    -- Карточка справа - последней: она читает то же, что только что нарисовано.
+    if chosen then
+        Detail:Show(chosen)
+    else
+        Detail:Show(nil, (total > 0) and Detail.NO_CARDS_BODY or nil)
+    end
 end
 
 -- ОДНА СТРОКА НАД СПИСКОМ: СКОЛЬКО СОВЕТОВ НЕ ПОКАЗАНО.
@@ -325,7 +909,11 @@ function Tab:NoticeShort(meta, chip, shown, total)
     local head = "Не показано советов: " .. hidden
     local out = {}
     if #causes > 0 then
-        out[#out + 1] = head .. " — " .. table.concat(causes, ", ") .. ". " .. Tab.DETAILS_HINT
+        local why = " — " .. table.concat(causes, ", ") .. ". " .. Tab.DETAILS_HINT
+        out[#out + 1] = head .. why
+        -- Список теперь уже (рядом с ним колонка категорий и карточка совета),
+        -- поэтому есть средний вариант: причина остаётся, уходит одно слово.
+        out[#out + 1] = "Не показано: " .. hidden .. why
     end
     out[#out + 1] = head .. ". " .. Tab.DETAILS_HINT
     return out, hidden
@@ -481,7 +1069,7 @@ function Tab:EmptyReason(meta, chip, total)
     if (meta.learnedRecipes or 0) == 0 then
         return "Данные ещё не собраны: выученных рецептов не найдено",
             "Либо профессий ещё нет, либо окно профессии не открывали."
-            .. " Загляните на вкладку «Мой персонаж» — там видно, что именно я прочитал."
+            .. " Загляните в раздел «Персонаж» — там видно, что именно я прочитал."
     end
 
     -- A. There really are cards; this chip just lets none of them through.
@@ -490,7 +1078,7 @@ function Tab:EmptyReason(meta, chip, total)
         if chip ~= ns.CHIP.ALL then
             return "В этом фильтре пусто",
                 "Советов у меня " .. total .. ", но ни один не подходит под фильтр «"
-                .. (ns.CHIP_LABEL[chip] or chip) .. "». Нажмите «Всё»,"
+                .. (ns.CHIP_LABEL[chip] or chip) .. "». Нажмите «Всё» слева,"
                 .. " чтобы увидеть весь список."
         end
         -- Cards exist and the filter is "Всё", so an empty panel here is a
@@ -527,7 +1115,7 @@ function Tab:EmptyReason(meta, chip, total)
         lines[#lines + 1] = "• ни одна ветка не записала причину — это дефект"
             .. " диагностики, покажите /fp diag"
     end
-    lines[#lines + 1] = "Можно попробовать другой профиль приоритетов над списком."
+    lines[#lines + 1] = "Можно попробовать другой профиль — он слева от списка."
     return "Пока советовать нечего", table.concat(lines, "\n")
 end
 

@@ -203,11 +203,11 @@ function Tab:RenderPlan()
         -- Кнопка из пула: подсказка ставится заново каждый раз, иначе на ней
         -- осталась бы подсказка от прошлого назначения.
         w:SetScript("OnEnter", function(self2)
-            self2.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
+            self2:Repaint(true)
             if tipTitle then W.ShowTip(self2, tipTitle, tipLines) end
         end)
         w:SetScript("OnLeave", function(self2)
-            self2.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
+            self2:Repaint(false)
             W.HideTip()
         end)
         w:ClearAllPoints(); w:SetPoint("TOPLEFT", self.planContent, "TOPLEFT", 0, -(y + 4))
@@ -435,13 +435,13 @@ function Tab:RenderShopping(head, stat, note, button)
     local lines = ns.ShoppingList:Lines()
     head("Общий список покупок")
     if #lines == 0 then
-        note("Пусто: всё, что я советую на вкладке «Сейчас», можно сделать"
+        note("Пусто: всё, что я советую в разделе «Советы», можно сделать"
             .. " из того, что у вас уже есть.")
         return
     end
     local snap = ns.CharacterScanner:Get()
     local afford = ns.ShoppingList:Affordability(snap)
-    note("Это сумма на случай, если делать всё из списка «Сейчас». Своё уже"
+    note("Это сумма на случай, если делать всё из раздела «Советы». Своё уже"
         .. " вычтено — и вычтено один раз, а не по разу на каждый совет.")
     for i = 1, math.min(15, #lines) do
         local line = lines[i]
