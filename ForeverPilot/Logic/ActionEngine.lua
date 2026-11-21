@@ -867,7 +867,22 @@ function Engine:AddEnchantCards(snap, scales)
     -- это вопрос «а нельзя ли лучше», и на него у нас нет полного ответа.
     local queue = {}
     for _, s in ipairs(advice.bare) do queue[#queue + 1] = s end
-    for _, s in ipairs(advice.replace) do queue[#queue + 1] = s end
+    -- ЗАНЯТЫЕ СЛОТЫ В КАРТОЧКИ НЕ ИДУТ.
+    --
+    -- Живая жалоба (маг 31 ур., 2026-11-21): «Чары: Чары для двуручного
+    -- оружия: малый интеллект» на посох, где у игрока уже стоит «Откровение» -
+    -- чары заведомо сильнее. Карточка честно писала «лучше или хуже я не
+    -- утверждаю», но стояла в списке СОВЕТОВ, с ценой реагентов и кнопкой, и
+    -- читалась как совет перекрыть. От уже наложенных чар игра отдаёт только
+    -- номер, сравнить мне нечем - значит и советовать нечего.
+    --
+    -- Сведения не теряются: какие слоты зачарованы, говорит сводная карточка
+    -- ниже («Уже зачарованы: …»), и туда же дописано, что перекрывать их я не
+    -- советую. EnchantAdvisor:Replacements по-прежнему отдаёт этот список.
+    local replaceSkipped = #(advice.replace or {})
+    if replaceSkipped > 0 and ns.Diag then
+        ns.Diag:Count("enchant.replaceNotAdvised", replaceSkipped)
+    end
     for _, s in ipairs(queue) do
         if added >= ns.MAX_CARDS_PER_KIND then break end
         added = added + 1
@@ -993,6 +1008,12 @@ function Engine:AddEnchantCards(snap, scales)
             .. ". Номер - это всё, что игра отдаёт от наложенной чары;"
             .. " что именно она даёт, по номеру я сказать не могу"
             .. " и выдумывать не буду."
+        -- Формулы на часть этих слотов у игрока есть, но перекрывать то, что
+        -- стоит, я не советую: сравнить не с чем (см. replaceSkipped выше).
+        if replaceSkipped > 0 then
+            wornText = wornText .. " Перекрывать их своими формулами не советую:"
+                .. " сравнить с тем, что уже наложено, мне нечем."
+        end
     end
     -- СЛОТ, ПРО КОТОРЫЙ СОВЕТА НЕТ, ОБЯЗАН БЫТЬ НАЗВАН НА ЭКРАНЕ, А НЕ ТОЛЬКО В
     -- ДИАГНОСТИКЕ. На настоящем маге это плащ и перчатки: формул на них он
@@ -1134,6 +1155,17 @@ function Engine:AddEnchantCards(snap, scales)
                 .. ((occupiedNothing > 0) and ("; на занятые слоты формулы есть,"
                     .. " но того, что вы цените, среди них нет") or "")
         end
+    end
+    -- ЗАНЯТЫЕ СЛОТЫ С ПОЛЕЗНОЙ ФОРМУЛОЙ: КАРТОЧКИ НЕТ, НО И ТИШИНЫ НЕТ.
+    -- Совет перекрыть наложенное я не даю (см. replaceSkipped в начале
+    -- ветки), и это сказано там, где игрок читает, почему ветка промолчала.
+    if replaceSkipped > 0 and self.branchNote.enchant then
+        self.branchNote.enchant = self.branchNote.enchant
+            .. "; на " .. replaceSkipped .. " "
+            .. U.plural(replaceSkipped, "зачарованный слот", "зачарованных слота",
+                "зачарованных слотов")
+            .. " у вас есть формулы, но перекрывать наложенное я не советую —"
+            .. " сравнить с ним мне нечем"
     end
     return produced
 end
@@ -2220,6 +2252,11 @@ function Engine:AddArbitrageCards(snap, scales)
             -- читал. Risk:RenderDoubts ставит ту же мысль первой фразой.
             suspect = { code = "arbitrage-markup-impossible", text = verdict.text,
                         ratio = verdict.markup }
+            -- И ВНИЗ СПИСКА. Прибыль, которой я сам не верю, не должна тянуть
+            -- карточку наверх: ось прибыли у такой карточки срезается, иначе
+            -- «+10з за штуку» с пометкой «сомнительно» всё равно стоит выше
+            -- настоящих советов.
+            axes.profit = axes.profit * 0.25
         end
 
         -- ОБЛИК. Схема та же, что у перекупки лота: купить и продать снова, то
@@ -2587,6 +2624,13 @@ function Engine:AddFavorCards(snap, scales)
     -- сумке. Такие позиции не выбрасываются молча - они пересчитываются в
     -- сводную карточку, где сказано, сколько Favor экономится.
     local ready, have, haveFavor = {}, {}, 0
+    -- НЕ ЛУЧШЕ ТОГО, ЧТО УЖЕ НАДЕТО - ТОЖЕ НЕ ПОКУПКА.
+    --
+    -- Живая жалоба: «За Благосклонность: Жемчужные сапоги, +15 баллов» при
+    -- надетых сапогах лучше; «Сфера мистического прозрения» в левую руку при
+    -- двуручном посохе. Такие позиции не выбрасываются молча - они
+    -- перечисляются в сводной карточке с причиной (см. Favor:Describe).
+    local worse, worseFavor = {}, 0
     -- Сколько позиций мы не смогли СОПОСТАВИТЬ с профессией игрока. Это не то
     -- же самое, что «навыка не хватает», и в живой игре было именно это: клиент
     -- назвал портняжке номер линии 2948 вместо 197, навык не нашёлся, и ветка
@@ -2598,13 +2642,47 @@ function Engine:AddFavorCards(snap, scales)
             if d.alreadyHave then
                 have[#have + 1] = d
                 haveFavor = haveFavor + (d.favor or 0)
+            elseif d.notUpgrade then
+                worse[#worse + 1] = d
+                worseFavor = worseFavor + (d.favor or 0)
             else
                 ready[#ready + 1] = d
             end
         end
     end
+    local function worseText()
+        local names = {}
+        for i = 1, math.min(3, #worse) do
+            local d = worse[i]
+            local reason
+            if d.blockedByTwoHand then
+                reason = "в левую руку, а у вас двуручное"
+                    .. (d.againstName and (" — " .. d.againstName) or "")
+            elseif d.againstName then
+                reason = "не лучше, чем " .. d.againstName
+            else
+                reason = "не лучше надетого"
+            end
+            names[#names + 1] = tostring(d.name) .. " (" .. reason .. ")"
+        end
+        return #worse .. " "
+            .. U.plural(#worse, "позицию", "позиции", "позиций")
+            .. " не советую — "
+            .. table.concat(names, ", ")
+            .. ((#worse > 3) and (" и ещё " .. (#worse - 3)) or "")
+            .. ": это " .. worseFavor .. " Favor, которые тратить незачем"
+    end
     if #ready == 0 then
-        if #have > 0 then
+        if #worse > 0 then
+            -- Всё, что осталось купить, хуже надетого: это ответ, а не тишина.
+            self.branchNote.favor =
+                "покупать за Благосклонность сейчас нечего: " .. worseText()
+                .. ((#have > 0)
+                    and (". Остальное доступное по навыку у вас уже есть ("
+                         .. #have .. " "
+                         .. U.plural(#have, "позиция", "позиции", "позиций") .. ")")
+                    or "")
+        elseif #have > 0 then
             self.branchNote.favor =
                 "всё, что доступно по навыку за Благосклонность, у вас уже есть"
                 .. " (" .. #have .. " "
@@ -2673,6 +2751,9 @@ function Engine:AddFavorCards(snap, scales)
             .. table.concat(names, ", ")
             .. ((#have > 3) and (" и ещё " .. (#have - 3)) or "")
             .. ": это " .. haveFavor .. " Favor, которые можно не тратить."
+    end
+    if #worse > 0 then
+        why1 = why1 .. " Ещё " .. worseText() .. "."
     end
     if readyCrates > 0 then
         why1 = why1 .. " Прямо сейчас у вас есть материал на " .. readyCrates .. " "
@@ -2772,7 +2853,15 @@ function Engine:AddFavorCards(snap, scales)
             local axes = blankAxes()
             -- Польза есть, но получить её нельзя за золото - только за время.
             -- Поэтому spend остаётся нулём, а power несёт настоящую оценку.
-            if d.score then axes.power = U.soft(d.score, scales.power) end
+            -- ОЦЕНИВАЕТСЯ ПРИРОСТ, а не вся вещь: d.score - это оценка
+            -- предмета против пустого слота, и именно она давала «+15» у
+            -- сапог хуже надетых. Нет прироста (сравнить было нечем) - нет и
+            -- числа: ось остаётся на уровне «польза есть, размер неизвестен».
+            if d.gain then
+                axes.power = U.soft(d.gain, scales.power)
+            elseif d.score then
+                axes.power = 0.15
+            end
             axes.ready = d.wearableNow and 0.6 or 0.2
 
             local why = "Порог — навык " .. tostring(d.skillNeeded)
@@ -2799,6 +2888,19 @@ function Engine:AddFavorCards(snap, scales)
                 why = why .. " Что даёт: " .. d.statText .. "."
             end
             if d.slotLabel then why = why .. " Слот «" .. d.slotLabel .. "»." end
+            -- С ЧЕМ СРАВНЕНО - СКАЗАНО ПРЯМО. Число справа на карточке - это
+            -- прирост против названной вещи, а не оценка самой покупки.
+            if d.gain then
+                if d.againstName then
+                    why = why .. " Это лучше, чем " .. d.againstName .. ", на "
+                        .. U.benefit(d.gain) .. "."
+                else
+                    why = why .. " Слот сейчас пуст — прирост " .. U.benefit(d.gain) .. "."
+                end
+            else
+                why = why .. " Сравнить с тем, что на вас надето, я не смог —"
+                    .. " прирост не называю."
+            end
 
             local matNames = {}
             for _, r in ipairs(d.reagents) do
@@ -2813,9 +2915,9 @@ function Engine:AddFavorCards(snap, scales)
                 icon = ns.KIND_ICON.FAVOR,
                 title = "За Благосклонность: " .. d.name,
                 benefit = tostring(d.favor) .. " Favor"
-                    .. (d.score and (", " .. U.benefitDelta(d.score)) or ""),
+                    .. (d.gain and (", " .. U.benefitDelta(d.gain)) or ""),
                 benefitKind = "power",
-                benefitValue = d.score,
+                benefitValue = d.gain,
                 why = why,
                 need = (#matNames > 0)
                     and ("Сделать потом из: " .. table.concat(matNames, ", ") .. ".")

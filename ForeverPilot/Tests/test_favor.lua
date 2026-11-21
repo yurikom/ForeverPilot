@@ -358,6 +358,139 @@ do
     end
 end
 
+-- ПРИРОСТ, А НЕ ПОЛНАЯ ОЦЕНКА ==========================================
+--
+-- Живая жалоба (маг 31 ур., 2026-11-21): «За Благосклонность: Жемчужные
+-- сапоги, +15 баллов» при надетых Сапогах из паучьего шелка, которые лучше по
+-- каждой характеристике. «+15» было полной оценкой вещи, как будто слот пуст.
+-- Игрок купил выкройку и реагенты под вещь хуже своей.
+
+local function wearBoots(env, stats)
+    H.item(env, 4320, { name = "Сапоги из паучьего шелка", equipLoc = "INVTYPE_FEET",
+        reqLevel = 20, classID = 4, subclassID = 1, quality = 3, sellPrice = 300 })
+    env.foreignItemStats[4320] = stats
+    env.foreignItemRecords[4320] = { id = 4320, inv = 8, ilvl = 25, req = 20,
+        quality = 3, class = 4, subclass = 1, stats = stats }
+    env.equipped.FEET = { itemID = 4320 }
+    H.itemsChanged(env)
+end
+
+local function planEntry(plan, itemID)
+    for _, d in ipairs((plan and plan.items) or {}) do
+        if d.outItemID == itemID then return d end
+    end
+    return nil
+end
+
+H.suite("Благосклонность: вещь хуже надетой не советуется")
+do
+    local env = favEnv { level = 31 }
+    local ns = env.ns
+    -- Надето лучше: больше выносливости и больше урона той же школы.
+    wearBoots(env, { sta = 8, int = 4, spArcane = 12 })
+    local snap = ns.CharacterScanner:Scan()
+    local boots = planEntry(ns.Favor:Plan(snap), 253897)
+    H.ok(boots ~= nil, "сапоги в плане есть")
+    if boots then
+        H.ok(boots.score ~= nil and boots.score > 0,
+            "полная оценка у них есть: " .. tostring(boots.score))
+        H.ok(boots.gain ~= nil and boots.gain < 0,
+            "а прирост против надетого отрицательный: " .. tostring(boots.gain))
+        H.eq(boots.notUpgrade, true, "и это названо: не улучшение")
+        H.ok(ns.Util.contains(tostring(boots.againstName), "паучьего"),
+            "сказано, с чем сравнивали: " .. tostring(boots.againstName))
+    end
+
+    local cards = H.build(env)
+    for _, c in ipairs(cards) do
+        if c.kind == ns.KIND.FAVOR and c.favorBuy then
+            H.ok(c.favorBuy.outItemID ~= 253897,
+                "карточки «купить выкройку сапог» нет: надетые лучше")
+        end
+    end
+    -- И это не тишина: причина названа либо на сводной карточке, либо в
+    -- примечании ветки.
+    local summary = findFavor(cards, ns, "Благосклонность торговца")
+    local said = (summary and summary.why or "")
+        .. " " .. tostring((ns.ActionEngine.branchNote or {}).favor or "")
+    H.ok(ns.Util.contains(said, "не советую"),
+        "сказано, что позицию не советую: " .. ns.Util.truncate(said, 300))
+    H.ok(ns.Util.contains(said, "Жемчужные сапоги"), "и названа сама вещь")
+end
+
+H.suite("Благосклонность: на карточке прирост против надетого, а не оценка вещи")
+do
+    local env = favEnv { level = 31 }
+    local ns = env.ns
+    -- Надето слабее: улучшение есть, но меньше полной оценки сапог.
+    wearBoots(env, { sta = 6, spArcane = 2 })
+    local snap = ns.CharacterScanner:Scan()
+    local boots = planEntry(ns.Favor:Plan(snap), 253897)
+    H.ok(boots ~= nil, "сапоги в плане есть")
+    if boots then
+        H.ok(boots.gain ~= nil and boots.gain > 0.5,
+            "прирост положительный: " .. tostring(boots.gain))
+        H.ok(boots.gain < boots.score,
+            string.format("и он меньше полной оценки: %.2f < %.2f",
+                boots.gain or 0, boots.score or 0))
+        H.eq(boots.notUpgrade, false, "это улучшение")
+    end
+    local cards = H.build(env)
+    local card
+    for _, c in ipairs(cards) do
+        if c.kind == ns.KIND.FAVOR and c.favorBuy
+           and c.favorBuy.outItemID == 253897 then card = c end
+    end
+    H.ok(card ~= nil, "карточка покупки есть")
+    if card and boots then
+        H.near(card.benefitValue, boots.gain, 0.001,
+            "число выгоды на карточке — это прирост")
+        H.ok(ns.Util.contains(card.why, "лучше, чем"),
+            "и в тексте сказано, против чего он посчитан: "
+            .. ns.Util.truncate(card.why, 300))
+        H.ok(ns.Util.contains(card.benefit, ns.Util.benefitDelta(boots.gain)),
+            "в столбце выгоды стоит прирост, а не полная оценка: "
+            .. tostring(card.benefit))
+    end
+end
+
+H.suite("Благосклонность: левая рука при двуручном оружии не советуется")
+do
+    local env = favEnv { level = 31 }
+    local ns = env.ns
+    -- Сфера мистического прозрения - в левую руку.
+    H.item(env, 249394, { name = "Сфера мистического прозрения",
+        equipLoc = "INVTYPE_HOLDABLE", reqLevel = 25, classID = 4, subclassID = 0,
+        quality = 3, sellPrice = 500 })
+    env.foreignItemStats[249394] = { int = 6, sp = 7, heal = 7 }
+    env.foreignItemRecords[249394] = { id = 249394, inv = 23, ilvl = 30, req = 25,
+        quality = 3, class = 4, subclass = 0, stats = { int = 6, sp = 7, heal = 7 } }
+    -- В правой руке двуручный посох, заметно сильнее сферы.
+    env.equipped.MAINHAND = { itemID = 249392 }
+    H.itemsChanged(env)
+    local snap = ns.CharacterScanner:Scan()
+    local orb = planEntry(ns.Favor:Plan(snap), 249394)
+    H.ok(orb ~= nil, "сфера в плане есть")
+    if orb then
+        H.eq(orb.blockedByTwoHand, true, "замечено, что в правой руке двуручное")
+        H.eq(orb.notUpgrade, true,
+            "и сфера не называется улучшением: посох пришлось бы снять (прирост "
+            .. tostring(orb.gain) .. ")")
+    end
+    local cards = H.build(env)
+    for _, c in ipairs(cards) do
+        if c.kind == ns.KIND.FAVOR and c.favorBuy then
+            H.ok(c.favorBuy.outItemID ~= 249394,
+                "карточки «купить формулу сферы» нет")
+        end
+    end
+    local summary = findFavor(cards, ns, "Благосклонность торговца")
+    local said = (summary and summary.why or "")
+        .. " " .. tostring((ns.ActionEngine.branchNote or {}).favor or "")
+    H.ok(ns.Util.contains(said, "двуручное"),
+        "причина названа — двуручное оружие: " .. ns.Util.truncate(said, 300))
+end
+
 H.suite("Благосклонность: выученный рецепт тоже считается «уже есть»")
 do
     local env = favEnv { level = 60 }

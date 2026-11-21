@@ -494,6 +494,72 @@ do
     end
 end
 
+H.suite("Арбитраж: непроверенная цена торговца и наценка выше наблюдавшейся — не верю")
+do
+    -- Живая жалоба (маг 31 ур., 2026-11-21): «Купить и перепродать: Лотос
+    -- смерти, +10з 80с за штуку» - у торговца «~60с (оценка)», на аукционе 12з.
+    -- Наценка x19 не дотянула до потолка x20, и карточка стояла с прибылью
+    -- крупными цифрами. Цену торговца при этом в игре никто не видел.
+    local env = H.load()
+    local ns = env.ns
+    env.money = 58052
+    env.auctionator = true
+    H.item(env, 7790, { name = "Лотос смерти", sellPrice = 100, stackCount = 20 })
+    env.prices[7790] = 120000
+    env.codexItems[7790] = {
+        sources = { { type = "vendor", npc = 263384, cost = 6000,
+                      from = { "recordings", "questie", "pfquest" } } },
+    }
+    env.codexNpcs[263384] = {
+        name = "Mister Graphed", subName = "Agent of the Black Market",
+        roles = { "vendor" }, spawns = { { map = 2548, x = 78.2, y = 51.9 } },
+    }
+    -- В круг поиска предмет попадает так же, как в игре: по нему есть история
+    -- цен (см. VA:KnownItems).
+    ns.Config:Get().priceHistory = ns.Config:Get().priceHistory or {}
+    ns.Config:Get().priceHistory[7790] = { [20777] = 120000 }
+    H.rescan(env)
+    ns.PriceProvider:BeginPass()
+    local opp = ns.VendorArbitrage:Evaluate(7790)
+    H.ok(opp ~= nil, "возможность не выбрасывается молча")
+    if opp then
+        H.eq(opp.askConf, ns.CONF.ESTIMATE, "цена торговца — оценка из чужой базы")
+        H.ok(opp.markup > ns.VendorArbitrage.MARKUP_NOTE
+            and opp.markup < ns.VendorArbitrage.MARKUP_LIMIT,
+            string.format("наценка между порогами: x%.1f", opp.markup))
+        H.eq(opp.markupVerdict and opp.markupVerdict.code, "markup-impossible",
+            "вердикт: непроверенной цене при такой наценке не верю")
+        H.eq(opp.markupVerdict and opp.markupVerdict.unverifiedAsk, true,
+            "и причина записана: цену никто не видел")
+        H.eq(opp.conf, ns.CONF.UNKNOWN, "достоверность снята совсем")
+    end
+    local cards = H.build(env)
+    local c = arbCard(cards, ns)
+    H.ok(c ~= nil, "карточка на экране осталась")
+    if c then
+        H.ok(ns.Util.contains(c.benefit or "", "сомнительно"),
+            "но помечена сомнительной: " .. tostring(c.benefit))
+        H.ok(c.suspect ~= nil, "и флаг сомнения стоит")
+    end
+end
+
+H.suite("Арбитраж: та же наценка на цене, которую игрок видел сам, — только упомянута")
+do
+    -- Свою цену торговца игрок видел у прилавка: ей верить есть чем, и
+    -- правило выше её не трогает.
+    local env = arbEnv { auction = 2000 }
+    local ns = env.ns
+    H.rescan(env)
+    ns.PriceProvider:BeginPass()
+    local opp = ns.VendorArbitrage:Evaluate(2324)
+    H.ok(opp ~= nil, "возможность есть")
+    if opp then
+        H.ok(opp.askConf ~= ns.CONF.ESTIMATE, "цена не оценка: " .. tostring(opp.askConf))
+        H.eq(opp.markupVerdict and opp.markupVerdict.code, "markup-note",
+            "вердикт остался «стоит упомянуть»")
+    end
+end
+
 H.suite("Арбитраж: один общинный источник у цены — сказано вслух")
 do
     -- Из 16259 записей о торговцах в Polestar_Codex провенанс «только
