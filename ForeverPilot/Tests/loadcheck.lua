@@ -145,7 +145,7 @@ if #extras == 0 then
         "Tests/test_vanish.lua", "Tests/test_recipe.lua", "Tests/test_confirm.lua",
         "Tests/test_nonsense.lua", "Tests/test_sense.lua",
         "Tests/test_void.lua", "Tests/test_ledger.lua", "Tests/test_ceiling.lua",
-        "Tests/test_anyclass.lua",
+        "Tests/test_anyclass.lua", "Tests/test_quiet.lua", "Tests/test_aware.lua",
         "Tests/corpus.lua", "Tests/sense.lua",
         -- Поиск живых SavedVariables: один на все наборы. Сломайся он - и
         -- проверки на настоящих данных пропустятся все сразу, так что

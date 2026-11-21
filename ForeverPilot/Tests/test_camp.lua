@@ -382,6 +382,131 @@ do
     end
 end
 
+-- 3б. ГОТОВОЕ В СУМКАХ - ЭТО «ПОСТАВЬ», А НЕ «СДЕЛАЙ» --------------------
+--
+-- Живая жалоба (маг 31 ур., 2026-11-21): первой карточкой списка стояло
+-- «Сделать для лагеря: Аквариум» с ценой материалов при 32 аквариумах в
+-- сумках, рядом - «Сделать костёр» при шести наборах для костра.
+
+H.suite("Лагерь: готовый предмет в сумках — «поставить», а не «сделать»")
+do
+    local env = campEnv()
+    local ns = env.ns
+    env.bags[FISH_BOWL] = 32
+    env.bags[BASIC_FIRE] = 6
+    H.itemsChanged(env)
+    local cards = campCards(env)
+    local place = byKeyPrefix(cards, "camp:place:" .. FISH_BOWL)
+    H.ok(place ~= nil, "карточка «поставить аквариум» есть")
+    if place then
+        H.ok(ns.Util.contains(place.title, "Поставить у костра"),
+            "заголовок говорит «поставить»: " .. tostring(place.title))
+        H.ok(ns.Util.contains(place.why, "32"),
+            "и сколько их лежит: " .. ns.Util.truncate(place.why, 160))
+        H.eq(place.cost, nil, "цены материалов на ней нет: покупать нечего")
+    end
+    local fire = byKeyPrefix(cards, "camp:place:" .. BASIC_FIRE)
+    H.ok(fire ~= nil, "карточка «разжечь костёр» есть")
+    if fire then
+        H.ok(ns.Util.contains(fire.title, "Разжечь костёр"),
+            "заголовок говорит «разжечь»: " .. tostring(fire.title))
+    end
+    for _, c in ipairs(cards) do
+        local key = tostring(c.key)
+        if key == "camp:make:" .. FISH_BOWL or key == "camp:fire:" .. BASIC_FIRE then
+            H.ok(false, "карточки «сделать» по лежащему в сумках предмету быть не должно: " .. key)
+        end
+    end
+end
+
+H.suite("Лагерь: предмета в сумках нет — совет «сделать» остаётся")
+do
+    local env = campEnv()
+    local cards = campCards(env)
+    H.ok(byKeyPrefix(cards, "camp:make:" .. FISH_BOWL) ~= nil,
+        "без аквариума в сумках карточка «сделать» на месте")
+    H.eq(byKeyPrefix(cards, "camp:place:" .. FISH_BOWL), nil,
+        "а «поставить» нет: ставить нечего")
+end
+
+-- 3в. БАФФ ЛАГЕРЯ НА ИГРОКЕ - ОБЪЕКТ УЖЕ РАБОТАЕТ ------------------------
+--
+-- Что стоит у костра, игра не говорит. Но бонус объекта - бафф, и бафф
+-- читается: если он на игроке, советовать поставить объект незачем.
+
+local function auraWorld(env, list)
+    env.G.C_UnitAuras = {
+        GetAuraDataByIndex = function(unit, index, filter)
+            local a = list[index]
+            if not a then return nil end
+            return { name = a.name, spellId = a.spellID }
+        end,
+    }
+end
+
+H.suite("Лагерь: бафф объекта уже на игроке — ставить его не советуем")
+do
+    local env = campEnv()
+    local ns = env.ns
+    env.bags[FISH_BOWL] = 32
+    H.itemsChanged(env)
+    -- 1255254 - один из номеров заклинания «Fish Bowl» (Data/Camp.lua).
+    auraWorld(env, { { name = "Что-то рыбное", spellID = 1255254 } })
+    local cards = campCards(env)
+    for _, c in ipairs(cards) do
+        H.ok(c.itemID ~= FISH_BOWL,
+            "карточки про аквариум нет: " .. tostring(c.key))
+    end
+    local said = false
+    for _, c in ipairs(cards) do
+        if ns.Util.contains(c.why or "", "Уже действует на вас: Аквариум") then said = true end
+    end
+    H.ok(said or ns.Util.contains(ns.ActionEngine.branchNote.camp or "", "Аквариум"),
+        "и сказано словами, что аквариум уже действует")
+    H.ok((ns.Diag:Init().counters["camp.effectAlreadyActive"] or 0) >= 1,
+        "в диагностике это посчитано")
+    local active = ns.CampAdvisor:ActiveEffects(ns.CharacterScanner:Get())
+    H.ok(active[FISH_BOWL] ~= nil, "ActiveEffects называет аквариум")
+end
+
+H.suite("Лагерь: бафф без номера узнаётся по имени предмета")
+do
+    -- Старый путь чтения баффов номер отдаёт не всегда: тогда сравнение идёт
+    -- по имени - бафф назван в точности как предмет лагеря.
+    local env = campEnv()
+    local ns = env.ns
+    auraWorld(env, { { name = "Аквариум" } })
+    H.build(env)
+    local active = ns.CampAdvisor:ActiveEffects(ns.CharacterScanner:Get())
+    H.ok(active[FISH_BOWL] ~= nil, "аквариум узнан по имени")
+end
+
+H.suite("Лагерь: посторонний бафф ничего не отменяет")
+do
+    local env = campEnv()
+    local ns = env.ns
+    auraWorld(env, { { name = "Чародейский интеллект", spellID = 1459 } })
+    local cards = campCards(env)
+    H.ok(byKeyPrefix(cards, "camp:make:" .. FISH_BOWL) ~= nil,
+        "совет про аквариум на месте")
+    local active = ns.CampAdvisor:ActiveEffects(ns.CharacterScanner:Get())
+    H.eq(next(active), nil, "и действующих объектов лагеря не найдено")
+end
+
+H.suite("Лагерь: номера заклинаний есть у всех 38 объектов")
+do
+    local env = campEnv()
+    local data = env.ns.CampData
+    local missing = 0
+    for _, row in ipairs(data.OBJECTS) do
+        local list = data.EFFECT_SPELLS[row.item]
+        if not (type(list) == "table" and #list >= 2) then missing = missing + 1 end
+    end
+    H.eq(missing, 0, "у каждого объекта минимум два номера: рецепт и установка")
+    H.eq(data.ITEM_BY_SPELL[1255254], FISH_BOWL, "обратный индекс собран")
+    H.eq(data.ITEM_BY_SPELL[818], nil, "классический костёр в индекс не попал")
+end
+
 -- 4. ЧЕРТЁЖ - ЭТО ПОКУПКА -----------------------------------------------
 
 H.suite("Лагерь: чертёж - предмет, и совет про него - покупка")

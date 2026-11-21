@@ -489,6 +489,18 @@ ns.DIFF_SKILL_CHANCE = {
 -- Throttling. The engine never recomputes more often than this.
 ns.RECOMPUTE_MIN_INTERVAL = 1.5   -- seconds between full recomputes
 ns.RECOMPUTE_DEBOUNCE     = 0.4   -- seconds to wait after the last event
+-- ПОКА НИКТО НЕ СМОТРИТ - НЕ СЧИТАЕМ. Полный пересчёт - это десятки миллисекунд
+-- одним куском (в живом файле игрока: в среднем 84 мс, пик 143 мс), то есть
+-- рывок кадра. При закрытом окне и выключенной панели он не нужен никому, и
+-- делается не чаще, чем раз в столько секунд - чтобы суточный слепок цен и
+-- уведомления не протухали совсем. См. MainFrame:ShouldDefer.
+-- Окно на экране: по мелочам (сумки, деньги, подгрузка имён, цены) считаем не
+-- чаще раза в столько секунд. Важная причина и жест игрока этого не ждут.
+ns.VISIBLE_SOFT_SECONDS = 5
+ns.HIDDEN_REBUILD_SECONDS = 900
+-- Как часто отложенный пересчёт проверяет, не пора ли (секунды). Сама проверка
+-- - два сравнения, пересчёта в ней нет.
+ns.DEFERRED_RETRY_SECONDS = 1.0
 ns.PRICE_STALE_SECONDS    = 48 * 3600
 -- ДВА РАЗНЫХ ВОПРОСА, И ПУТАНИЦА МЕЖДУ НИМИ СТОИЛА ВРАНЬЯ НА ЭКРАНЕ.
 --   PRICE_STALE_SECONDS - когда цене перестаёт быть веры (достоверность падает
@@ -520,8 +532,12 @@ ns.AUCTION_RESCAN_GUARD   = 60
 ns.PRICE_FRESH_SECONDS    = 6 * 3600
 
 -- How many cards the Now tab builds / shows.
-ns.MAX_CARDS = 40
-ns.MAX_CARDS_PER_KIND = 8
+-- 20 и 5, а не 40 и 8. На настоящем маге список был 46 советов, из них на
+-- экране 40: восемь перепродаж подряд и три совета перекрыть чары топили то,
+-- ради чего окно открывают. Список отсортирован по пользе, так что обрезается
+-- хвост, а не голова; что обрезано - сказано в диагностике (list-truncated).
+ns.MAX_CARDS = 20
+ns.MAX_CARDS_PER_KIND = 5
 
 -- How long a hidden card stays hidden. Two durations for two places, and the
 -- same gesture in both: two right clicks. On the small panel they put the step

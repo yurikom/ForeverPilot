@@ -212,7 +212,7 @@ local function initialize()
                     .. " по «" .. tostring(U.profLabel(prof)) .. "»")
             end
         end
-        ns.MainFrame:Rebuild()
+        ns.MainFrame:Rebuild(false, reasons)
         -- ГОРИЗОНТ - ДО СЛЕПКА, И ЭТО ВАЖНО ИМЕННО В ЭТОМ ПОРЯДКЕ. Слепок цен
         -- берёт список предметов у движка, а движок спрашивает у горизонта, что
         -- понадобится позже. Собери горизонт после слепка - и материалы на

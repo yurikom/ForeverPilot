@@ -60,7 +60,9 @@ function Tab:Build(parent)
         local chip = W.Chip(frame, ns.PROFILE_LABEL[key], function()
             ns.Config:SetProfile(key)
             Tab:SyncProfiles()
-            ns.MainFrame:Rebuild()
+            -- Жест игрока в самом окне: не откладывается ни на бегу, ни по
+            -- «недавно считали» (Main:ShouldDefer, причина opened).
+            ns.MainFrame:Rebuild(false, { opened = true })
         end, Tab.PROFILE_H)
         chip:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -Tab.PROFILE_TOP)
         chip.tooltipTitle = ns.PROFILE_LABEL[key]

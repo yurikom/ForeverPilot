@@ -101,6 +101,7 @@ function Enchant:SlotItems(snap)
             out[slotKey] = {
                 itemID = equipped.itemID, link = equipped.link,
                 enchantID = equipped.enchantID, where = "equipped",
+                enchantText = equipped.enchantText,
                 info = equipped.itemID and Api:ItemInfo(equipped.itemID) or nil,
             }
         end
@@ -521,6 +522,7 @@ function Enchant:Worn(snap)
                 itemName = (info and info.name) or U.itemFallbackName(item.itemID),
                 itemID = item.itemID,
                 enchantID = item.enchantID,
+                enchantText = item.enchantText,
                 where = item.where, inBag = item.inBag,
             }
         end

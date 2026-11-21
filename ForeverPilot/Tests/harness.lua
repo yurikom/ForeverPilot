@@ -632,6 +632,8 @@ function H.installFakes(env, opts)
             local info = env.items[e.itemID]
             out[slot] = {
                 slot = slot, itemID = e.itemID, enchantID = e.enchantID,
+                -- Слова чар: в игре их читает Api:InventoryEnchantText.
+                enchantText = e.enchantText,
                 link = e.link or (info and Api:ItemInfo(e.itemID).link) or nil,
             }
         end

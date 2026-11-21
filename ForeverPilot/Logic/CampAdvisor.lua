@@ -112,6 +112,41 @@ function Camp:ItemName(itemID)
     return nil
 end
 
+-- Что из лагеря уже действует на игрока ------------------------------------
+--
+-- Функций про лагерь в клиенте нет, но бонус объекта - это бафф, а баффы
+-- читаются (Api:PlayerAuras, снимок персонажа). Сравнение идёт по номеру
+-- заклинания (CampData.ITEM_BY_SPELL), а если клиент номера не отдал - по
+-- имени: бафф, названный в точности как предмет лагеря.
+--
+-- Возвращает { [itemID] = бафф }. Пустая таблица значит «ничего не видно», и
+-- это НЕ «ничего не стоит»: объекты без баффа (верстаки, костёр) так не
+-- увидеть вовсе.
+function Camp:ActiveEffects(snap)
+    local out = {}
+    local auras = snap and snap.auras
+    if type(auras) ~= "table" or #auras == 0 then return out end
+    local data = ns.CampData
+    if not data then return out end
+    local bySpell = data.ITEM_BY_SPELL or {}
+    local byName = nil
+    for _, a in ipairs(auras) do
+        local item = a.spellID and bySpell[a.spellID] or nil
+        if not item and a.name then
+            if not byName then
+                byName = {}
+                for itemID in pairs(data.BY_ITEM or {}) do
+                    local name = self:ItemName(itemID)
+                    if name then byName[name] = itemID end
+                end
+            end
+            item = byName[a.name]
+        end
+        if item then out[item] = a end
+    end
+    return out
+end
+
 -- Имя профессии на языке клиента ------------------------------------------
 --
 -- В данных профессия названа по-английски («Fishing»), потому что так её

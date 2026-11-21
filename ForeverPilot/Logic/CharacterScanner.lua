@@ -29,6 +29,9 @@ local function emptySnapshot()
         bank = nil, bankConf = CONF.UNKNOWN,
         alts = nil, altsConf = CONF.UNKNOWN,
         owned = {}, ownedConf = CONF.UNKNOWN,
+        -- Баффы на игроке. auraSource = nil значит «прочитать было нечем», а
+        -- не «баффов нет» (см. Api:PlayerAuras).
+        auras = {}, auraByName = {}, auraSource = nil,
         scannedAt = 0,
     }
 end
@@ -210,6 +213,14 @@ function Scanner:Scan()
 
     -- Equipment, with the enchant already decoded out of each item link.
     snap.equipped, snap.equippedConf = Api:Equipped()
+
+    -- Баффы: что на игроке действует прямо сейчас.
+    if Api.PlayerAuras then
+        snap.auras, snap.auraSource = Api:PlayerAuras()
+        for _, a in ipairs(snap.auras) do
+            if a.name then snap.auraByName[a.name] = a end
+        end
+    end
 
     -- STAT WEIGHTS COME AFTER THE EQUIPMENT, ON PURPOSE. When the client will
     -- not say what spec the character is - and at low level there may be no

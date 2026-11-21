@@ -294,7 +294,8 @@ function Main:Show()
     self.saidHowToShow = nil
     -- Zero clicks to an answer: the default tab is the ranked list.
     self:Select(ns.Config:Get().tab or "NOW")
-    self:Rebuild()
+    -- Окно открыли руками: считать надо сейчас, даже на бегу (см. ShouldDefer).
+    self:Rebuild(false, { opened = true })
 end
 
 function Main:Hide()
@@ -427,8 +428,8 @@ end
 -- cards. Called from the event scheduler, not per frame.
 -- Guarded so a failure anywhere in the pipeline lands in the diagnostics file
 -- with a traceback instead of taking the whole addon down.
-function Main:Rebuild(force)
-    local ok = ns.Diag:Guard("MainFrame:Rebuild", Main.RebuildInner, self, force)
+function Main:Rebuild(force, reasons)
+    local ok = ns.Diag:Guard("MainFrame:Rebuild", Main.RebuildInner, self, force, reasons)
     if not ok then
         -- The list may be half-built; say so rather than showing stale advice
         -- as if it were current.
@@ -439,8 +440,112 @@ function Main:Rebuild(force)
     return ok
 end
 
-function Main:RebuildInner(force)
-    if ns.Api:InCombat() and not force then return end
+-- КТО-НИБУДЬ СМОТРИТ НА СОВЕТЫ? Окно или панель шага на экране.
+function Main:AnyoneWatching()
+    if self.frame and self.frame:IsShown() then return true end
+    local P = ns.StepPanel
+    if P and P.frame and P.frame.IsShown and P.frame:IsShown() then return true end
+    return false
+end
+
+-- Причины, из-за которых считать надо, даже когда никто не смотрит: от них
+-- зависят уведомления и суточный слепок цен, а не только картинка.
+--
+-- «recipes» И «prices» ЗДЕСЬ НЕТ, И ЭТО НАМЕРЕННО. Окно профессии шлёт
+-- TRADE_SKILL_LIST_UPDATE на каждую сделанную вещь, а аукцион - событие на
+-- каждый поиск: с ними в списке закрытый аддон дёргал бы кадр раз в полторы
+-- секунды всё время, пока игрок крафтит или листает аукцион. Данные при этом
+-- не теряются: окно профессии читается и кеш цен сбрасывается в самом
+-- слушателе (Main.lua), до Rebuild, а список пересчитается, как только окно
+-- аддона откроют.
+Main.IMPORTANT_REASONS = {
+    opened = true, forced = true, deferredImportant = true,
+    character = true, level = true, skillcap = true, spec = true,
+}
+
+-- ОТЛОЖИТЬ ЛИ ПЕРЕСЧЁТ. Возвращает причину словом или nil.
+--
+-- Живые цифры (маг 31 ур., сеанс 23 минуты, окно и панель закрыты): 83 полных
+-- пересчёта, в среднем 84 мс, пик 143 мс - рывок кадра раз в 17 секунд ради
+-- списка, на который никто не смотрел. Правила:
+--   * на бегу не считаем вовсе (кроме «окно только что открыли руками»):
+--     рывок на бегу виден, на месте - нет; догоняем, когда игрок встал;
+--   * никто не смотрит - считаем только по важной причине или раз в
+--     ns.HIDDEN_REBUILD_SECONDS; сумки, деньги и подгрузка имён предметов сами
+--     по себе пересчёта закрытого окна не стоят.
+-- Принудительный пересчёт (кнопка «Обновить», смена профиля) сюда не заходит.
+function Main:ShouldDefer(reasons)
+    reasons = reasons or {}
+    local important = false
+    for flag in pairs(reasons) do
+        if Main.IMPORTANT_REASONS[flag] then important = true; break end
+    end
+    if not reasons.opened and ns.Api.PlayerMoving and ns.Api:PlayerMoving() then
+        return "moving", important
+    end
+    -- Идёт полоска заклинания или крафта: считать посреди неё - значит дёрнуть
+    -- кадр ровно тогда, когда игрок смотрит на полоску. Догоним, когда кончится.
+    if not reasons.opened and ns.Api.PlayerCasting and ns.Api:PlayerCasting() then
+        return "casting", important
+    end
+    if self:AnyoneWatching() then
+        -- СМОТРЯТ - СЧИТАЕМ, НО НЕ ЧАЩЕ РАЗА В VISIBLE_SOFT_SECONDS ПО МЕЛОЧАМ.
+        -- У аукциона и торговца события идут пачками (имена предметов, сумки,
+        -- деньги), и пересчёт на каждую пачку - это рывок кадра раз в полторы
+        -- секунды всё время, пока окно открыто. Важная причина и жест игрока
+        -- не ждут; мелочь догоняется через несколько секунд (Main:CatchUp).
+        local last = self.lastBuildAt
+        if (not important) and last
+            and (ns.Api:Now() - last) < (ns.VISIBLE_SOFT_SECONDS or 5) then
+            return "recent", important
+        end
+        return nil, important
+    end
+    if important then return nil, important end
+    local last = self.lastBuildAt
+    if (not last) or (ns.Api:Now() - last) >= (ns.HIDDEN_REBUILD_SECONDS or 900) then
+        return nil, important
+    end
+    return "hidden", important
+end
+
+-- Догнать отложенное. Зовётся планировщиком раз в такт (Events:Tick); сама по
+-- себе - несколько сравнений. Пересчёт случится, только когда ShouldDefer
+-- перестанет возражать.
+function Main:CatchUp(now)
+    if not self.stale then return false end
+    now = now or ns.Api:Now()
+    if self.lastCatchUpTry and (now - self.lastCatchUpTry) < (ns.DEFERRED_RETRY_SECONDS or 1) then
+        return false
+    end
+    self.lastCatchUpTry = now
+    if ns.Api:InCombat() then return false end
+    local reasons = { deferred = true }
+    if self.staleImportant then reasons.deferredImportant = true end
+    -- Окно открыто - догоняем сразу, как только можно; закрыто - ждём своей
+    -- причины или своего срока, как и любой другой пересчёт.
+    if self:ShouldDefer(reasons) then return false end
+    return self:Rebuild(false, reasons)
+end
+
+function Main:RebuildInner(force, reasons)
+    if ns.Api:InCombat() and not force then
+        -- В бою не считаем, но и не забываем: догоним после.
+        self.stale = true
+        return
+    end
+
+    if not force then
+        local why, important = self:ShouldDefer(reasons)
+        if why then
+            self.stale = true
+            if important then self.staleImportant = true end
+            if ns.Diag then ns.Diag:Count("recompute.deferred." .. why) end
+            return
+        end
+    end
+    self.stale, self.staleImportant = nil, nil
+    self.lastBuildAt = ns.Api:Now()
 
     local snap = ns.CharacterScanner:Scan()
 
@@ -545,7 +650,8 @@ function Main:OnCombat(inCombat)
         self.frame:Show()
         if self.frame.Raise then self.frame:Raise() end
         self.wasShown = nil
-        self:Rebuild()
+        -- Окно вернулось на экран: это то же, что «открыли».
+        self:Rebuild(false, { opened = true })
     end
 end
 
