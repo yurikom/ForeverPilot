@@ -112,6 +112,27 @@ function Camp:ItemName(itemID)
     return nil
 end
 
+-- Общий бафф лагеря на игроке ----------------------------------------------
+--
+-- { active = true, name, remaining } или nil. remaining - секунды до конца;
+-- nil, если игра не сказала, когда бафф кончится.
+function Camp:BuffState(snap)
+    local auras = snap and snap.auras
+    if type(auras) ~= "table" then return nil end
+    local ids = ns.CampData and ns.CampData.CAMP_BUFF_SPELLS or {}
+    for _, a in ipairs(auras) do
+        if a.spellID and ids[a.spellID] then
+            local remaining = nil
+            if a.expires and a.expires > 0 then
+                remaining = a.expires - Api:Now()
+                if remaining < 0 then remaining = 0 end
+            end
+            return { active = true, name = a.name, remaining = remaining }
+        end
+    end
+    return nil
+end
+
 -- Что из лагеря уже действует на игрока ------------------------------------
 --
 -- Функций про лагерь в клиенте нет, но бонус объекта - это бафф, а баффы

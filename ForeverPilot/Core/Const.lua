@@ -536,8 +536,16 @@ ns.PRICE_FRESH_SECONDS    = 6 * 3600
 -- экране 40: восемь перепродаж подряд и три совета перекрыть чары топили то,
 -- ради чего окно открывают. Список отсортирован по пользе, так что обрезается
 -- хвост, а не голова; что обрезано - сказано в диагностике (list-truncated).
-ns.MAX_CARDS = 20
+--
+-- 30, А НЕ 20: проверено на живом файле. После правок список сам стал 27
+-- советов, и предел 20 срезал хвост, в котором сводка по чарам (со словами
+-- того, что наложено) и «навык на пределе» - то есть обрезал нужное.
+ns.MAX_CARDS = 30
 ns.MAX_CARDS_PER_KIND = 5
+
+-- Лагерь: бонусы ещё висят дольше этого - советовать ставить лагерь заново
+-- незачем (Engine:AddCampCards).
+ns.CAMP_BUFF_REFRESH_SECONDS = 300
 
 -- How long a hidden card stays hidden. Two durations for two places, and the
 -- same gesture in both: two right clicks. On the small panel they put the step

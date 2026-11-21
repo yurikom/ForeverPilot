@@ -734,26 +734,148 @@ end
 
 -- 9. ДРУГОЙ ПЕРСОНАЖ ----------------------------------------------------
 
-H.suite("Лагерь: что здесь не сделать, а другой персонаж сделает")
+H.suite("Лагерь: предмет чужой профессии переслать не советуем")
 do
+    -- Раньше здесь была карточка «сделает другой персонаж и перешлёт почтой».
+    -- По правилам лагеря предмет ставит тот, у кого есть его профессия: колодец
+    -- маны магу без алхимии не поставить. Совет был невыполним.
     local env = campEnv()
     local ns = env.ns
     local cards = campCards(env)
-    local other = byKeyPrefix(cards, "camp:other:")
-    H.ok(other ~= nil, "карточка про другого персонажа есть")
-    if other then
-        H.ok(ns.Util.contains(other.title, "Белыйй"),
-            "в заголовке - фамилия, которой он отличается от второго Гендольфа: "
-            .. other.title)
-        H.ok(ns.Util.contains(other.why, "225"), "и навык того персонажа")
-        H.ok(ns.Util.contains(other.why, "Чернокнижник"), "и его класс словом")
-        H.ok(ns.Util.contains(other.why, "не видно"),
-            "и честно сказано, чего про него не видно: "
-            .. ns.Util.truncate(other.why, 170))
-        H.ok(ns.Util.contains(other.need, "почтой"), "и что делать: " .. other.need)
-        H.ok(ns.Util.contains(other.need, "не управляю"),
-            "и что аддон сам ничего не пересылает")
+    H.eq(byKeyPrefix(cards, "camp:other:"), nil,
+        "карточки «сделает другой персонаж» больше нет")
+    for _, c in ipairs(cards) do
+        H.ok(not ns.Util.contains(c.need or "", "почтой"),
+            "и ни одна карточка лагеря не предлагает пересылать почтой: " .. tostring(c.key))
     end
+    -- Что такие предметы на аккаунте есть, план по-прежнему знает.
+    local plan = ns.CampAdvisor:Plan(ns.CharacterScanner:Get())
+    H.ok(#plan.elsewhere > 0, "в плане предметы другого персонажа остались")
+    H.ok((ns.Diag:Init().counters["camp.otherProfessionNotAdvised"] or 0) >= 1,
+        "и в диагностике это посчитано")
+end
+
+H.suite("Лагерь: свой предмет у костра один — второго не советуем")
+do
+    -- У костра игрок ставит один свой предмет, и после установки все его
+    -- предметы лагеря час на откате. Совет «сделай ещё и второй» вёл к вещи,
+    -- которую поставить будет нельзя.
+    local env = campEnv()
+    local cards = campCards(env)
+    local own = 0
+    for _, c in ipairs(cards) do
+        local key = tostring(c.key)
+        if key:sub(1, 10) == "camp:make:" or key:sub(1, 11) == "camp:place:" then
+            if c.itemID ~= BASIC_FIRE then own = own + 1 end
+        end
+    end
+    H.eq(own, 1, "ровно один свой предмет лагеря в советах")
+end
+
+H.suite("Лагерь: бонусы лагеря уже на игроке — карточек лагеря нет")
+do
+    -- Увидено в игре: игрок поставил аквариум, на нём бафф «Бонусы лагеря»
+    -- (1229741), а первой карточкой стояло «Поставить у костра: Аквариум».
+    local env = campEnv()
+    local ns = env.ns
+    env.bags[FISH_BOWL] = 31
+    env.bags[BASIC_FIRE] = 3
+    H.itemsChanged(env)
+    env.G.C_UnitAuras = {
+        GetAuraDataByIndex = function(unit, index)
+            if index == 1 then
+                return { name = "Бонусы лагеря", spellId = 1229741,
+                         expirationTime = H.clock + 43 * 60 }
+            end
+            return nil
+        end,
+    }
+    local cards = campCards(env)
+    H.eq(#cards, 0, "ни одной карточки лагеря: сделать с ним сейчас нечего")
+    local note = ns.ActionEngine.branchNote.camp or ""
+    H.ok(ns.Util.contains(note, "бонусы лагеря уже на вас"),
+        "и причина названа словами: " .. note)
+    H.ok(ns.Util.contains(note, "43 минуты"), "и сколько ещё висит бафф: " .. note)
+    H.ok((ns.Diag:Init().counters["camp.buffActive"] or 0) >= 1, "в диагностике посчитано")
+    local state = ns.CampAdvisor:BuffState(ns.CharacterScanner:Get())
+    H.ok(state and state.active, "BuffState видит бафф")
+
+    -- Бафф кончается: карточка возвращается и говорит об этом.
+    env.G.C_UnitAuras = {
+        GetAuraDataByIndex = function(unit, index)
+            if index == 1 then
+                return { name = "Бонусы лагеря", spellId = 1229741,
+                         expirationTime = H.clock + 3 * 60 }
+            end
+            return nil
+        end,
+    }
+    local soon = campCards(env)
+    local place = byKeyPrefix(soon, "camp:place:" .. FISH_BOWL)
+    H.ok(place ~= nil, "за три минуты до конца совет поставить вернулся")
+    if place then
+        H.ok(ns.Util.contains(place.why, "кончаются через 3 минуты"),
+            "и сказано, что бонусы кончаются: " .. ns.Util.truncate(place.why, 220))
+        H.ok(ns.Util.contains(place.why, "посидите у костра минуту"),
+            "и как получить бафф: " .. ns.Util.truncate(place.why, 220))
+    end
+
+    -- Игра не сказала, когда бафф кончится: считаем, что он висит.
+    env.G.C_UnitAuras = {
+        GetAuraDataByIndex = function(unit, index)
+            if index == 1 then return { name = "Бонусы лагеря", spellId = 1229741 } end
+            return nil
+        end,
+    }
+    local unknown = campCards(env)
+    H.eq(#unknown, 0, "срок неизвестен, но бафф есть - карточек нет")
+
+    -- Баффа нет вовсе: всё как раньше.
+    env.G.C_UnitAuras = { GetAuraDataByIndex = function() return nil end }
+    local none = campCards(env)
+    H.ok(byKeyPrefix(none, "camp:place:" .. FISH_BOWL) ~= nil,
+        "баффа нет - совет поставить аквариум на месте")
+end
+
+H.suite("Лагерь: предмет на перезарядке — не советуем ставить, говорим сколько ждать")
+do
+    local env = campEnv()
+    local ns = env.ns
+    env.bags[FISH_BOWL] = 31
+    H.itemsChanged(env)
+    -- Общий откат предметов лагеря - час; прошло 20 минут. Часы игры идут от
+    -- запуска компьютера, поэтому сначала отматываем их вперёд: начало отката
+    -- раньше нуля игра не отдаёт.
+    H.clock = H.clock + 100000
+    env.G.C_Container = env.G.C_Container or {}
+    env.G.C_Container.GetItemCooldown = function(itemID)
+        if itemID == FISH_BOWL then return H.clock - 20 * 60, 3600, 1 end
+        return 0, 0, 1
+    end
+    H.eq(math.floor(ns.Api:ItemCooldownRemaining(FISH_BOWL) + 0.5), 40 * 60,
+        "откат прочитан: осталось 40 минут")
+    H.eq(ns.Api:ItemCooldownRemaining(BASIC_FIRE), 0, "костёр готов")
+    local cards = campCards(env)
+    H.eq(byKeyPrefix(cards, "camp:place:" .. FISH_BOWL), nil,
+        "карточки «поставить аквариум» нет: он на откате")
+    H.eq(byKeyPrefix(cards, "camp:make:" .. FISH_BOWL), nil,
+        "и «сделать» тоже нет: предмет лежит в сумках")
+
+    -- Откат прошёл - карточка на месте.
+    env.G.C_Container.GetItemCooldown = function() return 0, 0, 1 end
+    local ready = campCards(env)
+    H.ok(byKeyPrefix(ready, "camp:place:" .. FISH_BOWL) ~= nil,
+        "откат кончился - совет поставить вернулся")
+
+    -- Общий короткий откат (секунда) откатом не считается.
+    env.G.C_Container.GetItemCooldown = function() return H.clock - 0.2, 1.5, 1 end
+    H.eq(ns.Api:ItemCooldownRemaining(FISH_BOWL), 0, "полторы секунды - это не откат")
+    -- Функции нет или она упала - «не знаю», и совет остаётся.
+    env.G.C_Container.GetItemCooldown = function() error("заблокировано") end
+    H.eq(ns.Api:ItemCooldownRemaining(FISH_BOWL), nil, "функция упала - nil, а не ошибка")
+    local blind = campCards(env)
+    H.ok(byKeyPrefix(blind, "camp:place:" .. FISH_BOWL) ~= nil,
+        "откат прочитать нечем - совет поставить остаётся")
 end
 
 -- 10. ФРАКЦИЯ -----------------------------------------------------------

@@ -815,11 +815,9 @@ do
     for _, card in ipairs(camp) do
         if tostring(card.key):find("^camp:other:") then other = card end
     end
-    H.ok(other ~= nil, "и совет про второго персонажа тоже")
-    if other then
-        H.ok(ns.Util.contains(other.title, "Белыйй"),
-            "в нём назван персонаж с фамилией: " .. other.title)
-    end
+    -- Совета «сделает другой персонаж и перешлёт» больше нет: предмет чужой
+    -- профессии этим персонажем не поставить (Data/Camp.lua).
+    H.eq(other, nil, "совета переслать предмет чужой профессии нет")
 
     -- ЦЕНА РАБОТЫ - ВЫЗОВАМИ, НА НАСТОЯЩИХ ДАННЫХ.
     local realBuy = ns.PriceProvider.Buy

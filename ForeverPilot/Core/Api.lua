@@ -1668,6 +1668,31 @@ end
 -- Equipment --------------------------------------------------------------
 
 -- slotKey -> { itemID, link, enchantID } for every slot we reason about.
+-- ОТКАТ ПРЕДМЕТА -------------------------------------------------------------
+--
+-- Сколько секунд предмет ещё на перезарядке: 0 - готов, nil - спросить нечем
+-- или ответ нечитаем. Нужен лагерю: установка одного предмета отправляет все
+-- свои предметы лагеря на общий часовой откат, и совет «поставь» в этот час
+-- невыполним. Короткий общий откат (до полутора секунд) откатом не считается.
+local function cooldownLeft(fn, itemID, now)
+    local start, duration = fn(itemID)
+    start, duration = tonumber(start) or 0, tonumber(duration) or 0
+    if start <= 0 or duration <= 1.5 then return 0 end
+    local left = start + duration - now
+    if left < 0 then left = 0 end
+    return left
+end
+function Api:ItemCooldownRemaining(itemID)
+    itemID = tonumber(itemID)
+    if not itemID then return nil end
+    local C = _G.C_Container
+    local fn = (type(C) == "table" and C.GetItemCooldown) or _G.GetItemCooldown
+    if type(fn) ~= "function" then return nil end
+    local ok, left = pcall(cooldownLeft, fn, itemID, Api:Now())
+    if not ok or type(left) ~= "number" then return nil end
+    return left
+end
+
 -- ИГРОК ЧТО-ТО ПРОИЗНОСИТ ИЛИ ДЕЛАЕТ ВЕЩЬ ----------------------------------
 --
 -- Крафт - тоже произнесение: окно профессии шлёт событие на каждую сделанную

@@ -2981,6 +2981,35 @@ function Engine:AddCampCards(snap, scales)
         return 0
     end
 
+    -- ОБЩИЙ БАФФ ЛАГЕРЯ УЖЕ НА ИГРОКЕ - СТАВИТЬ ЛАГЕРЬ ЗАНОВО НЕЗАЧЕМ.
+    --
+    -- Увидено в игре (2026-11-21): игрок поставил аквариум, на нём висит бафф
+    -- «Бонусы лагеря», а первой карточкой списка по-прежнему стояло «Поставить
+    -- у костра: Аквариум». Бафф лагеря один на всё и держится час
+    -- (Data/Camp.lua, CAMP_BUFF_SPELLS), свой предмет у костра у игрока один, и
+    -- после установки он час на откате - то есть пока бафф висит, сделать с
+    -- лагерем нечего. Карточки возвращаются, когда бафф кончается.
+    local campBuff = Camp.BuffState and Camp:BuffState(snap) or nil
+    local campBuffEnds = nil
+    if campBuff then
+        local left = campBuff.remaining
+        -- Порог - в Core/Const.lua; запасное значение - те же пять минут.
+        if left == nil or left > (ns.CAMP_BUFF_REFRESH_SECONDS or 5 * 60) then
+            local text = "бонусы лагеря уже на вас"
+            if left then
+                local minutes = math.ceil(left / 60)
+                text = text .. ", ещё " .. minutes .. " "
+                    .. U.plural(minutes, "минуту", "минуты", "минут")
+            end
+            self.branchNote.camp = text .. " — ставить лагерь заново пока незачем"
+            if ns.Diag then ns.Diag:Count("camp.buffActive") end
+            return 0
+        end
+        local minutes = math.max(1, math.ceil(left / 60))
+        campBuffEnds = "Бонусы лагеря кончаются через " .. minutes .. " "
+            .. U.plural(minutes, "минуту", "минуты", "минут") .. "."
+    end
+
     local added = 0
     local coverText = Camp:CoverText(plan)
     -- Полное объяснение ограничения - под курсор, вместе с тем, каких профессий
@@ -3138,15 +3167,35 @@ function Engine:AddCampCards(snap, scales)
     -- Что уже стоит у костра, игра по-прежнему не говорит - но что лежит в
     -- сумках, видно точно, и делать второй раз то, что лежит, незачем.
     -- Возвращает true, если карточка «поставить» сделана.
+    -- Откат предмета лагеря. Установка одного предмета отправляет все свои на
+    -- общий откат в час: пока он идёт, совет «поставь» невыполним, и вместо
+    -- карточки остаётся строка с тем, сколько ждать.
+    local onCooldown = {}
     local function placeInstead(d, isFire)
         local have = (snap and snap.bags and tonumber(snap.bags[d.item])) or 0
         if have <= 0 then return false end
+        local wait = Api.ItemCooldownRemaining and Api:ItemCooldownRemaining(d.item) or nil
+        if wait and wait > 60 then
+            local minutes = math.ceil(wait / 60)
+            onCooldown[#onCooldown + 1] = d.name .. " — ещё " .. minutes .. " "
+                .. U.plural(minutes, "минуту", "минуты", "минут")
+            if ns.Diag then ns.Diag:Count("camp.itemOnCooldown") end
+            return true
+        end
+        local body = "В сумках уже лежит " .. have .. " "
+            .. U.plural(have, "штука", "штуки", "штук")
+            .. " — делать и покупать не нужно."
+        if isFire then
+            body = body .. " Без костра предметы лагеря не ставятся."
+        else
+            -- Как получить сам бафф - правила из гайдов (Data/Camp.lua).
+            body = Engine.JoinSentences(body,
+                "Потом посидите у костра минуту — бонусы лагеря придут на час.")
+            body = Engine.JoinSentences(body, campBuffEnds)
+        end
         campCard(d, "camp:place:" .. d.item,
             (isFire and "Разжечь костёр: " or "Поставить у костра: ") .. d.name,
-            "В сумках уже лежит " .. have .. " "
-                .. U.plural(have, "штука", "штуки", "штук")
-                .. " — делать и покупать не нужно."
-                .. (isFire and " Без костра предметы лагеря не ставятся." or ""),
+            body,
             (isFire and "Поставить и разжечь — делаете вы. "
                 or "Поставить у костра — ставите вы. ") .. Camp:LimitShort(),
             { kind = "showItem", label = "Показать предмет", itemID = d.item },
@@ -3248,57 +3297,15 @@ function Engine:AddCampCards(snap, scales)
         })
     end
 
-    -- 4. ЧТО СДЕЛАЕТ ДРУГОЙ ПЕРСОНАЖ. У игрока две профессии лагеря лежат на
-    --    втором персонаже, и сам он об этом не думает: в сумки и в окно
-    --    профессий он смотрит на том, кем играет.
-    local other = plan.elsewhere[1]
-    if other and added < 4 then
-        local who = Camp:HolderLabel(other.holder)
-        local text = "Порог — навык " .. tostring(other.need)
-        if other.profLabel then
-            text = text .. " по «" .. other.profLabel .. "»"
-        end
-        if other.skill then
-            text = text .. ", у вас " .. other.skill .. ", а у " .. who .. " хватает."
-        else
-            text = text .. "; у этого персонажа такой профессии нет, а у "
-                .. who .. " она есть."
-        end
-        -- ЧЕГО ПРО НЕГО НЕ ВИДНО - СКАЗАНО. Книга рецептов есть только у того
-        -- персонажа, кем играют: выучен ли у второго этот рецепт, мне не видно,
-        -- и делать вид, что видно, нельзя.
-        text = Engine.JoinSentences(text,
-            "Выучен ли у него этот рецепт, мне не видно: книга рецептов другого"
-            .. " персонажа мне не отдаётся.")
-        text = Engine.JoinSentences(text, readyText(other))
-        added = added + 1
-        local axes = blankAxes()
-        axes.power = other.power
-        axes.ready = 0.15
-        self:Add({
-            key = "camp:other:" .. tostring(other.item),
-            kind = ns.KIND.CAMP,
-            icon = ns.KIND_ICON.CAMP,
-            -- Заголовок короткий НАРОЧНО: в нём полное имя персонажа, а у
-            -- игрока два «Гендольфа», и без фамилии совет бессмыслен. Поэтому
-            -- слова «для лагеря» сжаты до «Лагерь:» - место в строке уходит на
-            -- то, что игроку нужно различать.
-            title = "Лагерь: " .. other.name .. " сделает "
-                .. tostring(other.holder.fullName),
-            benefit = benefitOf(other),
-            benefitKind = "power",
-            why = withCover(text),
-            need = "Сделать тем персонажем и переслать почтой. Я почтой не"
-                .. " управляю и персонажей не переключаю.",
-            action = { kind = "showItem", label = "Показать предмет",
-                       itemID = other.item },
-            itemID = other.item,
-            conf = other.conf,
-            axes = axes,
-            tipNote = tipNote,
-            sourceNote = sourceNote,
-            camp = other,
-        })
+    -- 4. ДРУГОЙ ПЕРСОНАЖ.
+    -- ПРЕДМЕТ ЧУЖОЙ ПРОФЕССИИ ПОСТАВИТЬ НЕЛЬЗЯ - И СОВЕТОВАТЬ ЕГО ПЕРЕСЫЛАТЬ ТОЖЕ.
+    -- Раньше здесь была карточка «это сделает другой персонаж и перешлёт
+    -- почтой». По правилам лагеря предмет ставит тот, у кого есть его профессия
+    -- (Data/Camp.lua): алхимический колодец магу без алхимии не поставить,
+    -- сколько его ни пересылай. Совет был невыполним, поэтому его больше нет;
+    -- что такие предметы на аккаунте есть, видно в плане и в диагностике.
+    if plan.elsewhere[1] and ns.Diag then
+        ns.Diag:Count("camp.otherProfessionNotAdvised", #plan.elsewhere)
     end
 
     -- 5. РЕЦЕПТ У ТРЕНЕРА. Первый тир рецепта с чертежа не имеет: его даёт
@@ -3321,29 +3328,17 @@ function Engine:AddCampCards(snap, scales)
             nil, 0.3)
     end
 
-    -- 6. Второй по пользе свой предмет - если после всего осталось место.
-    for _, d in ipairs(hereList) do
-        if added >= 4 then break end
-        if not shown[d.item] and placeInstead(d, false) then
-            shown[d.item] = true
-        elseif not shown[d.item] then
-            shown[d.item] = true
-            campCard(d, "camp:make:" .. d.item,
-                "Сделать для лагеря: " .. d.name,
-                Engine.JoinSentences(
-                    Engine.JoinSentences(
-                        Engine.JoinSentences(thresholdText(d), "Рецепт у вас выучен."),
-                        costText(d)),
-                    readyText(d)),
-                "Поставить у костра — ставите вы. " .. Camp:LimitShort(),
-                makeAction(d),
-                (not d.haveAll) and d.costKnown and d.cost or nil)
-        end
-    end
+    -- ВТОРОГО СВОЕГО ПРЕДМЕТА ЗДЕСЬ НЕТ, И ЭТО НАМЕРЕННО. У костра игрок ставит
+    -- один свой предмет, и после установки все его предметы лагеря час на
+    -- откате (Data/Camp.lua). Совет «сделай ещё и второй» вёл к вещи, которую
+    -- поставить будет нельзя.
 
     if added == 0 then
         -- ПРИЧИНА РАЗНАЯ, И ЭТО РАЗНЫЕ ОТВЕТЫ.
-        if activeText then
+        if #onCooldown > 0 then
+            self.branchNote.camp = "предметы лагеря на перезарядке: "
+                .. table.concat(onCooldown, "; ")
+        elseif activeText then
             self.branchNote.camp = "всё, что вы можете поставить сами, уже"
                 .. " действует на вас: " .. table.concat(activeNames, ", ")
         elseif plan.unread > 0 then
