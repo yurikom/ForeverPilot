@@ -12,46 +12,99 @@ local Main = {}
 ns.MainFrame = Main
 
 -- РАЗДЕЛЫ ОКНА - КНОПКАМИ В ЛЕВОЙ ПОЛОСЕ, как в большом окне Polestar: значок и
--- подпись, выбранный раздел светлее и с золотой полоской. «Настройки» стоят
--- внизу полосы, отдельно от рабочих разделов.
+-- подпись, выбранный раздел светлее, с золотой полоской и золотым значком.
+-- «Настройки» стоят внизу полосы, отдельно от рабочих разделов.
 --
--- full: раздел занимает всю площадь окна (у «Советов» свои колонки и шапка).
--- У остальных шапку с названием и одной строкой «что здесь» рисует само окно.
+-- glyph - значок из своего набора (Media\icon-*.tga); icon - картинка игры на то
+--         время, пока клиент своих файлов не видит (до перезапуска игры).
+-- full  - раздел занимает всю площадь окна (у «Советов» свои колонки и шапка).
+--         У остальных шапку с названием и строкой «что здесь» рисует само окно.
+--
+-- РАЗДЕЛОВ ТРИ. Было четыре: ещё «Персонаж» (что аддон знает о персонаже) и
+-- «Крафт» (любой рецепт до материалов). Игрок спросил про оба, зачем они
+-- (2026-11-21): уровень и профессии он знает сам, а крафтит в окне профессии.
+-- «Персонаж» убран; от «Крафта» оставлено то, чего в игре нет, - общий список
+-- покупок под все советы, и раздел назван тем, что в нём лежит.
 Main.TABS = {
-    { key = "NOW",    label = "Советы",    module = "TabNow", full = true,
+    { key = "NOW",    label = "Советы",    module = "TabNow", full = true, glyph = "bulb",
       icon = "Interface\\Icons\\INV_Misc_Note_01" },
-    { key = "CHAR",   label = "Персонаж",  module = "TabCharacter", portrait = true,
-      icon = "Interface\\Icons\\INV_Misc_Gear_01",
-      about = "Что я вижу у героя: профессии, рецепты, экипировка и чары, материалы." },
-    { key = "CRAFT",  label = "Крафт",     module = "TabCraft",
-      icon = "Interface\\Icons\\Trade_BlackSmithing",
-      about = "Рецепт — до материалов и порядка крафта. Ниже — общий список покупок." },
-    { key = "CONFIG", label = "Настройки", module = "TabSettings", bottom = true,
+    { key = "CRAFT",  label = "Покупки",   module = "TabCraft", glyph = "wallet",
+      icon = "Interface\\Icons\\INV_Misc_Bag_08",
+      about = "Всё, что нужно докупить для советов: что, где и почём." },
+    { key = "CONFIG", label = "Настройки", module = "TabSettings", bottom = true, glyph = "sliders",
       icon = "Interface\\Icons\\Trade_Engineering",
       about = "Вид окна, панель шага, навигация и то, что учитывать в советах." },
 }
 
 -- РАЗМЕТКА ОКНА, ЧИСЛАМИ В ОДНОМ МЕСТЕ.
-Main.RAIL_W = 78             -- полоса разделов слева
-Main.RAIL_BUTTON_H = 54
-Main.RAIL_TOP = 50           -- первая кнопка полосы, под значком аддона
-Main.FOOT_H = 26             -- строка состояния внизу
-Main.BAND_H = 62             -- шапка раздела (у «Советов» своя, той же высоты)
--- Три колонки «Советов» уже не помещаются в прежние 560: полоса, категории,
--- список и карточка совета. Меньше этого окно не сжимается.
+Main.RAIL_W = 68             -- полоса разделов слева
+Main.RAIL_BUTTON_H = 52
+Main.RAIL_TOP = 62           -- первая кнопка полосы, под значком аддона
+Main.BAND_H = 78             -- шапка раздела (у «Советов» своя)
+Main.STATUS_W = 156          -- строка «кто и сколько золота» под фильтром
+-- Три колонки «Советов»: фильтр, список, карточка совета - плюс полоса
+-- разделов. Меньше этого окно не сжимается.
 Main.MIN_WIDTH, Main.MIN_HEIGHT = 860, 480
-Main.DEFAULT_WIDTH, Main.DEFAULT_HEIGHT = 980, 600
+Main.DEFAULT_WIDTH, Main.DEFAULT_HEIGHT = 1000, 600
+-- И БОЛЬШЕ ЭКРАНА НЕ РАСТЁТ. Игрок растянул окно за край экрана, угол для
+-- изменения размера уехал туда же, и вернуть окно стало нечем (2026-11-21:
+-- «кроме как закрыть, не могу ни сузить, ни чё»). Окно занимает не больше этой
+-- доли экрана - и при растягивании, и при открытии с сохранённым размером.
+Main.SCREEN_SHARE = 0.94
 
--- Свой значок аддона. Файл новый, а новые файлы клиент видит только после
--- полного перезапуска игры (не /reload) - до тех пор стоит запасной значок.
+-- Свой значок аддона. Файл клиент видит только после полного перезапуска игры;
+-- до тех пор стоит запасной значок из игры.
 Main.LOGO = "Interface\\AddOns\\ForeverPilot\\Media\\Icon"
 Main.LOGO_FALLBACK = "Interface\\Icons\\INV_Misc_PocketWatch_01"
 
 -- Площадь разделов по размеру окна. Одна функция на код и на проверки
 -- (Tests/uistub.lua, S.layout): числа разметки не повторяются в двух местах.
 function Main.HostSize(width, height)
-    return (tonumber(width) or 0) - Main.RAIL_W - 2,
-        (tonumber(height) or 0) - Main.FOOT_H - 2
+    return (tonumber(width) or 0) - Main.RAIL_W - 2, (tonumber(height) or 0) - 2
+end
+
+-- Сколько места на экране - в единицах самого окна (у окна свой масштаб).
+function Main:ScreenLimit()
+    local parent = _G.UIParent
+    local sw = parent and parent.GetWidth and tonumber(parent:GetWidth()) or 0
+    local sh = parent and parent.GetHeight and tonumber(parent:GetHeight()) or 0
+    if sw <= 0 or sh <= 0 then return nil end
+    local scale = ns.Config:Scale()
+    return math.floor(sw / scale * Main.SCREEN_SHARE), math.floor(sh / scale * Main.SCREEN_SHARE)
+end
+
+-- Размер окна в допустимых пределах: не меньше минимума и не больше экрана.
+-- Если экран меньше минимума (очень крупный масштаб), побеждает экран: тесное
+-- окно лучше окна, до угла которого не дотянуться.
+function Main:FitSize(width, height)
+    width = math.max(Main.MIN_WIDTH, tonumber(width) or Main.DEFAULT_WIDTH)
+    height = math.max(Main.MIN_HEIGHT, tonumber(height) or Main.DEFAULT_HEIGHT)
+    local maxW, maxH = self:ScreenLimit()
+    if maxW then
+        width = math.min(width, maxW)
+        height = math.min(height, maxH)
+    end
+    return math.floor(width), math.floor(height)
+end
+
+function Main:ApplyResizeBounds()
+    local f = self.frame
+    if not f then return end
+    local maxW, maxH = self:ScreenLimit()
+    local minW, minH = Main.MIN_WIDTH, Main.MIN_HEIGHT
+    if maxW then
+        minW, minH = math.min(minW, maxW), math.min(minH, maxH)
+    end
+    if f.SetResizeBounds then
+        if maxW then
+            f:SetResizeBounds(minW, minH, maxW, maxH)
+        else
+            f:SetResizeBounds(minW, minH)
+        end
+    elseif f.SetMinResize then
+        f:SetMinResize(minW, minH)
+        if maxW and f.SetMaxResize then f:SetMaxResize(maxW, maxH) end
+    end
 end
 
 function Main:Build()
@@ -63,7 +116,7 @@ function Main:Build()
     f:SetToplevel(true)
     f:Hide()
     local T = W.THEME
-    W.Backdrop(f, T.bg[1], T.bg[2], T.bg[3], T.bg[4], 0.14)
+    W.Backdrop(f, T.bg[1], T.bg[2], T.bg[3], 1, 0.16)
 
     f:SetMovable(true)
     f:SetResizable(true)
@@ -71,11 +124,7 @@ function Main:Build()
     -- позиция возвращает его туда же после перезагрузки — и схватить его нечем.
     -- У панели и у стрелки это стояло с самого начала, у окна — нет.
     f:SetClampedToScreen(true)
-    if f.SetResizeBounds then
-        f:SetResizeBounds(Main.MIN_WIDTH, Main.MIN_HEIGHT)
-    elseif f.SetMinResize then
-        f:SetMinResize(Main.MIN_WIDTH, Main.MIN_HEIGHT)
-    end
+    Main:ApplyResizeBounds()
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(self) self:StartMoving() end)
@@ -135,19 +184,19 @@ function Main:Build()
     self.rail = rail
 
     local logo = rail:CreateTexture(nil, "ARTWORK")
-    logo:SetSize(30, 30)
-    logo:SetPoint("TOP", rail, "TOP", 0, -10)
+    logo:SetSize(36, 36)
+    logo:SetPoint("TOP", rail, "TOP", 0, -12)
     W.SetTextureOr(logo, Main.LOGO, Main.LOGO_FALLBACK)
     self.logo = logo
 
     self.tabButtons = {}
     local top = Main.RAIL_TOP
     for _, def in ipairs(Main.TABS) do
-        local btn = W.RailButton(rail, def.icon, def.label, function()
+        local btn = W.RailButton(rail, def.glyph, def.label, function()
             Main:Select(def.key)
-        end, Main.RAIL_W, Main.RAIL_BUTTON_H)
+        end, Main.RAIL_W, Main.RAIL_BUTTON_H, def.icon)
         if def.bottom then
-            btn:SetPoint("BOTTOMLEFT", rail, "BOTTOMLEFT", 0, 6)
+            btn:SetPoint("BOTTOMLEFT", rail, "BOTTOMLEFT", 0, 8)
         else
             btn:SetPoint("TOPLEFT", rail, "TOPLEFT", 0, -top)
             top = top + Main.RAIL_BUTTON_H + 2
@@ -156,34 +205,45 @@ function Main:Build()
             btn.tooltipTitle = def.label
             btn.tooltipText = def.about
         end
-        -- Раздел «Персонаж» - лицом самого персонажа, если клиент умеет.
-        if def.portrait and type(_G.SetPortraitTexture) == "function" then
-            local ok = pcall(_G.SetPortraitTexture, btn.icon, "player")
-            if ok then btn.icon:SetTexCoord(0, 1, 0, 1) else btn.icon:SetTexture(def.icon) end
-        end
         self.tabButtons[def.key] = btn
     end
+
+    -- КНОПКА, КОТОРАЯ СУЩЕСТВУЕТ РОВНО ПОКА ЕСТЬ ЧТО ИСПРАВЛЯТЬ.
+    --
+    -- Панель шага закрывается крестиком, и это создаёт состояние «панели нет, а
+    -- как её вернуть — непонятно». Пока панель убрана, в полосе над
+    -- «Настройками» стоит кнопка «Панель»: один щелчок по видимой кнопке, а не
+    -- три действия по памяти. Там, где кнопка бессмысленна, её нет вовсе.
+    local restore = W.RailButton(rail, "undo", "Панель", function()
+        -- Через TurnOn, а не SetEnabled: сообщение в чат печатает он, и
+        -- печатает честно — если правило боя или подземелья всё ещё держит
+        -- панель скрытой, он скажет это, а не «готово».
+        if ns.StepPanel then ns.StepPanel:TurnOn() end
+    end, Main.RAIL_W, Main.RAIL_BUTTON_H, "Interface\\Icons\\INV_Misc_PocketWatch_01")
+    restore:SetPoint("BOTTOMLEFT", rail, "BOTTOMLEFT", 0, 8 + Main.RAIL_BUTTON_H + 2)
+    restore.tooltipTitle = "Вернуть панель текущего шага"
+    restore.tooltipText = "Маленькая панель с одним верхним советом. Вы её убрали;"
+        .. " эта кнопка ставит её обратно."
+    restore:Hide()
+    self.restorePanel = restore
 
     -- ПЛОЩАДЬ РАЗДЕЛОВ ------------------------------------------------------
     -- host - вся площадь справа от полосы: её целиком занимают «Советы».
     local host = CreateFrame("Frame", nil, f)
     host:SetPoint("TOPLEFT", f, "TOPLEFT", Main.RAIL_W + 1, -1)
-    host:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, Main.FOOT_H + 1)
+    host:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
     self.host = host
 
     -- У остальных разделов сверху шапка: название и одна строка «что здесь».
-    local band = CreateFrame("Frame", nil, host)
+    local band = W.Band(host, Main.BAND_H)
     band:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 0)
     band:SetPoint("TOPRIGHT", host, "TOPRIGHT", 0, 0)
-    band:SetHeight(Main.BAND_H)
-    W.Ground(band, T.band)
-    W.Hairline(band, "BOTTOM")
     band:Hide()
     self.band = band
-    self.bandTitle = W.Label(band, "", W.FONT_TITLE, T.text[1], T.text[2], T.text[3])
-    self.bandTitle:SetPoint("TOPLEFT", band, "TOPLEFT", 16, -12)
+    self.bandTitle = W.Label(band, "", W.FONT_HERO, T.text[1], T.text[2], T.text[3])
+    self.bandTitle:SetPoint("TOPLEFT", band, "TOPLEFT", 24, -16)
     self.bandAbout = W.Label(band, "", W.FONT_SMALL, T.dim[1], T.dim[2], T.dim[3])
-    self.bandAbout:SetPoint("TOPLEFT", band, "TOPLEFT", 16, -40)
+    self.bandAbout:SetPoint("TOPLEFT", band, "TOPLEFT", 24, -48)
     self.bandAbout:SetJustifyH("LEFT")
     self.bandAbout:SetWordWrap(false)
 
@@ -192,21 +252,20 @@ function Main:Build()
     page:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", 0, 0)
     self.page = page
 
-    -- КНОПКА, НА КОТОРОЙ БЫЛО ТОЛЬКО КВАДРАТИК.
+    -- В УГЛУ ОКНА: «обновить» и «закрыть» - значками, поверх раздела.
     --
-    -- Подписью стоял символ ✕, которого в шрифте клиента нет: игрок видел
-    -- пустой квадрат и спросил, делает ли эта кнопка вообще что-нибудь. Делала -
-    -- закрывала окно, - но узнать это было нельзя: ни читаемой подписи, ни
-    -- подсказки при наведении у неё не было, в отличие от соседей. Теперь
-    -- подпись из ns.GLYPH (её рисует любой шрифт), и подсказка есть, как у
-    -- «Обновить» и «Вернуть панель».
-    local close = W.Button(f, ns.GLYPH.CLOSE, 22, 20, function() Main:Hide() end)
-    close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -8)
-    -- Крестик стоит в углу окна поверх раздела: он обязан быть выше его
-    -- содержимого, иначе карточка совета перехватывала бы щелчок.
-    close:SetFrameLevel((f:GetFrameLevel() or 1) + 30)
+    -- Подписью крестика когда-то стоял символ ✕, которого в шрифте клиента нет:
+    -- игрок видел пустой квадрат и спросил, делает ли эта кнопка вообще
+    -- что-нибудь. Теперь это свой значок, а пока клиент своих файлов не видит -
+    -- буква из ns.GLYPH (её рисует любой шрифт). Подсказка есть в обоих случаях.
+    local level = (f:GetFrameLevel() or 1) + 30
+    local close = W.Button(f, "", 26, 26, function() Main:Hide() end)
+    close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -10)
+    close:SetFrameLevel(level)
+    close:SetQuiet(true)
+    close:SetGlyph("close", ns.GLYPH.CLOSE, 14)
     close:SetScript("OnEnter", function(self)
-        self.fpBG:SetColorTexture(0.55, 0.22, 0.22, 0.95)
+        self:Repaint(true)
         W.ShowTip(self, "Закрыть окно", Main:HowToShow())
     end)
     close:SetScript("OnLeave", function(self)
@@ -214,20 +273,14 @@ function Main:Build()
         W.HideTip()
     end)
 
-    -- СТРОКА СОСТОЯНИЯ ------------------------------------------------------
-    local foot = CreateFrame("Frame", nil, f)
-    foot:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", Main.RAIL_W + 1, 1)
-    foot:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
-    foot:SetHeight(Main.FOOT_H)
-    W.Ground(foot, T.foot)
-    W.Hairline(foot, "TOP")
-    self.foot = foot
-
-    local refresh = W.Button(foot, "Обновить", 76, 18, function() Main:Rebuild(true) end)
-    refresh:SetPoint("RIGHT", foot, "RIGHT", -22, 0)
+    local refresh = W.Button(f, "", W.ready and 26 or 80, 26, function() Main:Rebuild(true) end)
+    refresh:SetPoint("RIGHT", close, "LEFT", -4, 0)
+    refresh:SetFrameLevel(level)
+    refresh:SetQuiet(true)
+    refresh:SetGlyph("reload", "Обновить", 14)
     refresh:SetScript("OnEnter", function(self)
         self:Repaint(true)
-        W.ShowTip(self, "Пересчитать", "Обычно я пересчитываю сам, когда что-то"
+        W.ShowTip(self, "Обновить", "Обычно я пересчитываю сам, когда что-то"
             .. " меняется. Эта кнопка — если хочется прямо сейчас.")
     end)
     refresh:SetScript("OnLeave", function(self)
@@ -236,55 +289,44 @@ function Main:Build()
     end)
     self.closeButton, self.refreshButton = close, refresh
 
-    -- КНОПКА, КОТОРАЯ СУЩЕСТВУЕТ РОВНО ПОКА ЕСТЬ ЧТО ИСПРАВЛЯТЬ.
-    --
-    -- Панель шага теперь закрывается крестиком, и это создаёт новое состояние:
-    -- панели нет, а как её вернуть — непонятно. Галочка в настройках и команда
-    -- есть, но и то и другое надо знать. Поэтому пока панель убрана, в строке
-    -- состояния стоит кнопка «Вернуть панель», и путь от /fp до панели — один
-    -- щелчок по видимой кнопке, а не три действия по памяти.
-    --
-    -- Приём у Polestar: пустое состояние несёт кнопку, устраняющую именно эту
-    -- причину пустоты, и там, где кнопка бессмысленна, её нет вовсе.
-    local restore = W.Button(foot, "Вернуть панель", 112, 18, function()
-        -- Через TurnOn, а не SetEnabled: сообщение в чат печатает он, и
-        -- печатает честно — если правило боя или подземелья всё ещё держит
-        -- панель скрытой, он скажет это, а не «готово».
-        if ns.StepPanel then ns.StepPanel:TurnOn() end
-    end)
-    restore:SetPoint("RIGHT", refresh, "LEFT", -6, 0)
-    restore:Hide()
-    restore:SetScript("OnEnter", function(self)
-        self:Repaint(true)
-        W.ShowTip(self, "Вернуть панель текущего шага",
-            "Маленькая панель с одним верхним советом. Вы её убрали;"
-            .. " эта кнопка ставит её обратно.")
-    end)
-    restore:SetScript("OnLeave", function(self)
-        self:Repaint(false)
-        W.HideTip()
-    end)
-    self.restorePanel = restore
-
-    self.status = W.Label(foot, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
-    self.status:SetPoint("LEFT", foot, "LEFT", 14, 0)
-    self.status:SetPoint("RIGHT", restore, "LEFT", -10, 0)
+    -- Кто и сколько у него золота - две тихие строки внизу колонки фильтра.
+    -- Стоят на своей рамке поверх раздела: колонка фильтра - дочерняя рамка со
+    -- своим фоном, и строка, нарисованная прямо на окне, оказалась бы под ним.
+    local statusHost = CreateFrame("Frame", nil, f)
+    statusHost:SetSize(Main.STATUS_W, 34)
+    statusHost:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", Main.RAIL_W + 18, 12)
+    statusHost:SetFrameLevel(level)
+    self.statusHost = statusHost
+    self.status = W.Label(statusHost, "", W.FONT_CAPTION, T.muted[1], T.muted[2], T.muted[3])
+    self.status:SetPoint("BOTTOMLEFT", statusHost, "BOTTOMLEFT", 0, 0)
     self.status:SetJustifyH("LEFT")
-    self.status:SetWordWrap(false)
+    self.status:SetWidth(Main.STATUS_W)
 
+    -- УГОЛ ДЛЯ ИЗМЕНЕНИЯ РАЗМЕРА.
     local grip = CreateFrame("Button", nil, f)
-    grip:SetSize(16, 16)
-    grip:SetPoint("BOTTOMRIGHT", -2, 2)
-    grip:SetFrameLevel((f:GetFrameLevel() or 1) + 30)
+    grip:SetSize(18, 18)
+    grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -2, 2)
+    grip:SetFrameLevel(level)
     local gripTex = grip:CreateTexture(nil, "OVERLAY")
     gripTex:SetAllPoints()
-    gripTex:SetColorTexture(1, 1, 1, 0.14)
+    if not W.SetIcon(gripTex, "grip", { 1, 1, 1, 0.35 }) then
+        gripTex:SetColorTexture(1, 1, 1, 0.14)
+        gripTex:Show()
+    end
     grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
     grip:SetScript("OnMouseUp", function()
         f:StopMovingOrSizing()
+        -- Что бы ни вышло из-под мыши, размер возвращается в пределы экрана.
+        local w, h = Main:FitSize(f:GetWidth(), f:GetHeight())
+        f:SetSize(w, h)
         Main:SavePosition()
         Main:RenderActive()
     end)
+    grip:SetScript("OnEnter", function(self)
+        W.ShowTip(self, "Размер окна", "Потяните за угол. Вернуть как было — /fp reset.")
+    end)
+    grip:SetScript("OnLeave", W.HideTip)
+    self.grip = grip
 
     f:SetScript("OnSizeChanged", function()
         if Main.resizeThrottle then return end
@@ -346,6 +388,9 @@ end
 -- стоит пустой вкладки и записи в диагностике, а не сломанного окна.
 function Main:Select(key)
     self:Build()
+    -- Раздела с таким ключом нет (его убрали, а ключ остался в сохранённых
+    -- настройках или в команде) - открываются «Советы».
+    if not self:TabDef(key) then key = "NOW" end
     local cfg = ns.Config:Get()
     cfg.tab = key
 
@@ -365,12 +410,19 @@ function Main:Select(key)
     -- Шапка раздела: у «Советов» своя, у остальных её рисует окно.
     local def = self:TabDef(key)
     if def and not def.full then
+        local hostW = self:HostNow()
         self.bandTitle:SetText(def.label)
-        W.SetFitted(self.bandAbout, def.about or "",
-            math.max(120, (self:HostNow()) - 60))
+        -- Справа в шапке стоят «обновить» и «закрыть»: строке оставлено место.
+        W.SetFitted(self.bandAbout, def.about or "", math.max(120, hostW - 48 - 90))
+        self.band:SetStarWidth(hostW)
         self.band:Show()
     else
         self.band:Hide()
+    end
+    -- Строка «кто и сколько золота» стоит под фильтром - то есть только там,
+    -- где он есть.
+    if self.statusHost then
+        if def and def.full then self.statusHost:Show() else self.statusHost:Hide() end
     end
 
     local mod = self:TabModule(key)
@@ -486,7 +538,11 @@ function Main:ApplyPosition()
     local width, height = tonumber(ui.width), tonumber(ui.height)
     if not width or width < Main.MIN_WIDTH then width = Main.DEFAULT_WIDTH end
     if not height or height < Main.MIN_HEIGHT then height = Main.DEFAULT_HEIGHT end
+    -- И не больше экрана: сохранённый размер мог остаться от окна, растянутого
+    -- за его край.
+    width, height = self:FitSize(width, height)
     self.frame:SetSize(width, height)
+    self:ApplyResizeBounds()
     self:RescueOffScreen()
 end
 
@@ -532,6 +588,10 @@ end
 function Main:ApplyScale()
     if not self.frame then return end
     self.frame:SetScale(ns.Config:Scale())
+    -- Масштаб меняет то, сколько окна помещается на экране.
+    local w, h = self:FitSize(self.frame:GetWidth(), self.frame:GetHeight())
+    self.frame:SetSize(w, h)
+    self:ApplyResizeBounds()
 end
 
 -- Minimap button --------------------------------------------------------
@@ -733,24 +793,22 @@ function Main:RebuildCardsInner()
     if ns.StepPanel then ns.StepPanel:Refresh() end
 end
 
+-- КТО И СКОЛЬКО ЗОЛОТА. Раньше в этой строке стояло ещё число советов и «когда
+-- обновлено»: первое видно в шапке списка, второе игроку ни к чему.
 function Main:UpdateStatus()
     if not self.status then return end
-    local meta = ns.ActionEngine.meta or {}
     local snap = ns.CharacterScanner:Get()
-
-    local bits = {}
+    local lines = {}
     if snap then
-        bits[#bits + 1] = (snap.name or "?") .. ", " .. (snap.level or "?") .. " ур."
-        bits[#bits + 1] = U.money(snap.money)
+        local who = tostring(snap.name or "?")
+        if snap.level then who = who .. " · " .. tostring(snap.level) .. " ур." end
+        lines[#lines + 1] = who
+        lines[#lines + 1] = U.money(snap.money)
     end
-    bits[#bits + 1] = #(ns.ActionEngine.cards or {}) .. " "
-        .. U.plural(#(ns.ActionEngine.cards or {}), "совет", "совета", "советов")
-    if meta.builtAt and meta.builtAt > 0 then
-        local age = ns.Api:ServerTime() - meta.builtAt
-        if age > 60 then bits[#bits + 1] = "обновлено " .. (U.ageText(age) or "") end
+    W.SetFitted(self.status, lines[1] or "", Main.STATUS_W)
+    if lines[2] then
+        self.status:SetText((self.status:GetText() or "") .. "\n" .. lines[2])
     end
-    self.status:SetText(table.concat(bits, "   •   "))
-
     self:UpdateRestoreButton()
 end
 

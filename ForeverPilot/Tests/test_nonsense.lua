@@ -235,16 +235,21 @@ H.suite("Чушь: «потолок поднимался» нет ни на вк
 do
     local env = historyWorld()
     local ns = env.ns
+    -- Самого раздела «Персонаж» в окне больше нет (игрок назвал его
+    -- бесполезным, 2026-11-21); строка проверяется на всех разделах, какие
+    -- есть, - её не должно быть нигде.
     ns.MainFrame:Build()
-    ns.MainFrame:Select("CHAR")
-    ns.MainFrame:RenderActive()
-    local _, texts = S.harvest(env.world, ns.MainFrame.frame)
+    H.eq(ns.MainFrame:TabDef("CHAR"), nil, "раздела «Персонаж» в окне нет")
     local screen = {}
-    for i, t in ipairs(texts) do screen[i] = S.plain(t) end
+    for _, def in ipairs(ns.MainFrame.TABS) do
+        ns.MainFrame:Select(def.key)
+        ns.MainFrame:RenderActive()
+        local _, texts = S.harvest(env.world, ns.MainFrame.frame)
+        for _, t in ipairs(texts) do screen[#screen + 1] = S.plain(t) end
+    end
     screen = table.concat(screen, "\n")
-    H.ok(screen:find(ns.Util.profLabel("Tailoring"), 1, true) ~= nil,
-        "профессии на вкладке показаны (именем для игрока)")
-    H.ok(screen:find("поднимался", 1, true) == nil, "строки «потолок поднимался» на вкладке нет")
+    H.ok(#screen > 200, "разделы окна отрисованы")
+    H.ok(screen:find("поднимался", 1, true) == nil, "строки «потолок поднимался» в окне нет")
 
     local report = ns.SourceCheck and ns.SourceCheck.CheckSkillCaps
         and ns.SourceCheck:CheckSkillCaps() or nil
@@ -642,7 +647,7 @@ do
     local total = #(ns.ActionEngine.cards or {})
     local place = {}
     for i, card in ipairs(ns.ActionEngine.cards or {}) do place[card.key] = i end
-    local hovered, bad, wrong = 0, {}, {}
+    local hovered, bad, retold = 0, {}, {}
     for _, row in ipairs(ns.Card.pool) do
         local enter = row.__shown and row.card and row.__scripts and row.__scripts.OnEnter
         if enter then
@@ -657,19 +662,21 @@ do
             if text:find("Приоритет", 1, true) or text:find("%d%.%d%d %(профиль") then
                 bad[#bad + 1] = tostring(row.card.title)
             end
-            local n, of = text:match("Место в общем списке: (%d+) из (%d+)")
-            if tonumber(n) ~= place[row.card.key] or tonumber(of) ~= total then
-                wrong[#wrong + 1] = tostring(row.card.title) .. " (сказано " .. tostring(n)
-                    .. " из " .. tostring(of) .. ", на деле " .. tostring(place[row.card.key])
-                    .. " из " .. total .. ")"
+            -- И СЛУЖЕБНЫХ СТРОК В ПОДСКАЗКЕ НЕТ ВОВСЕ. Сначала балл заменили
+            -- на «Место в общем списке: N из M»; игрок назвал лишним и это, и
+            -- «достоверность» (2026-11-21). Место совета видно по самому
+            -- списку, а под курсором - подсказка предмета, как в игре.
+            if text:find("Место в общем списке", 1, true) or text:find("Достоверность", 1, true) then
+                retold[#retold + 1] = tostring(row.card.title)
             end
         end
     end
     H.ok(hovered >= 5, "подсказок просмотрено: " .. hovered)
     H.eq(#bad, 0, "числа «Приоритет: 0.NN» в подсказках нет"
         .. ((#bad > 0) and ("  <- " .. table.concat(bad, "; ")) or ""))
-    H.eq(#wrong, 0, "вместо него — место совета в списке, и оно верное"
-        .. ((#wrong > 0) and ("  <- " .. table.concat(wrong, "; ", 1, math.min(3, #wrong))) or ""))
+    H.eq(#retold, 0, "и строк «место в списке» и «достоверность» там тоже нет"
+        .. ((#retold > 0) and ("  <- " .. table.concat(retold, "; ", 1, math.min(3, #retold))) or ""))
+    H.ok(total > 0 and place ~= nil, "советов в списке: " .. total)
 end
 
 H.suite("Чушь: «Материал есть у Гендольф Белыйй, 13 ур., Чернокнижник — 46 шт..» — две точки")
@@ -1011,30 +1018,37 @@ do
     local shown = ns.ActionEngine:Filtered(chip)
 
     -- Подробности на месте - все четыре, как и раньше.
+    -- (Без строк «почему у совета нет кнопки»: они теперь стоят в карточке
+    -- самого совета, на месте кнопки.)
     local notices = ns.TabNow:Notices(ns.ActionEngine.meta, chip, #shown,
-        #ns.ActionEngine.cards, shown)
+        #ns.ActionEngine.cards, {})
     H.ok(#notices >= 3, "причин, о которых есть что сказать: " .. #notices)
     local joined = table.concat(notices, " ")
     H.ok(ns.Util.contains(joined, "порог мелкой"), "порог среди них")
     H.ok(ns.Util.contains(joined, "Профиль «"), "профиль тоже")
     H.ok(ns.Util.contains(joined, "не поместил"), "и длина списка")
-    H.ok(#joined > 400, "вместе это " .. #joined .. " символов — та самая простыня")
+    H.ok(#joined > 250, "вместе это " .. #joined .. " символов — та самая простыня")
 
-    -- А НА ЭКРАНЕ - ОДНА СТРОКА.
-    local strip = ns.TabNow.strip
-    H.eq(strip.__shown, true, "строка над списком показана")
-    local line = S.plain(strip.text:GetText() or "")
-    H.eq(line:find("\n", 1, true), nil, "она ровно одна: " .. line)
+    -- А НА ЭКРАНЕ - ОДНА КОРОТКАЯ СТРОКА В ШАПКЕ: сколько советов и сколько не
+    -- показано. Отдельной полосы над списком и абзаца под ним больше нет.
+    local tab = ns.TabNow
+    H.eq(tab.strip, nil, "отдельной строки над списком нет")
+    H.eq(tab.note, nil, "и абзаца под списком тоже")
+    local line = S.plain(tab.summary:GetText() or "")
+    H.eq(line:find("\n", 1, true), nil, "строка в шапке ровно одна: " .. line)
     H.ok(ns.Util.charLen(line) <= 110,
         "и короткая: " .. ns.Util.charLen(line) .. " символов вместо " .. #joined)
-    H.ok(line:find("%d") ~= nil, "число не показанных советов в ней есть")
-    H.ok(ns.Util.contains(line, ns.TabNow.DETAILS_HINT), "и путь к подробностям")
-    H.eq(#(strip.details or {}), #notices, "а под курсором - все подробности")
+    H.ok(line:find("не показано", 1, true) ~= nil and line:find("%d") ~= nil,
+        "число не показанных советов в ней есть")
+    -- Под курсором у неё - все подробности (и причины молчащих веток).
+    local tipText = table.concat(tab.summaryTip or {}, " ")
+    for _, notice in ipairs(notices) do
+        H.ok(tipText:find(notice, 1, true) ~= nil,
+            "под курсором есть: " .. ns.Util.truncate(S.plain(notice), 40))
+    end
 
-    -- И ВЫСОТА ЭТОЙ ОБЛАСТИ - ОДНА СТРОКА, А НЕ ПЯТЬ.
-    H.eq(strip.__height, ns.TabNow.STRIP_H,
-        "высота области над списком - ровно строка (" .. tostring(strip.__height) .. ")")
-    -- Первый совет начинается сразу под ней: между ними только отступ.
+    -- ПЕРВЫЙ СОВЕТ НАЧИНАЕТСЯ СРАЗУ ПОД ШАПКОЙ: над ним только заголовок его
+    -- раздела.
     local first
     for _, row in ipairs(ns.Card.pool) do
         if row.__shown and row.card and not first then first = row end
@@ -1042,9 +1056,8 @@ do
     H.ok(first ~= nil, "первый совет нарисован")
     if first then
         local rect = S.rectOf(first, ns.TabNow.content)
-        -- Между строкой и первым советом - только заголовок его раздела.
-        H.ok(rect ~= nil and rect.top >= -(ns.TabNow.STRIP_H + 14 + ns.TabNow.SECTION_H),
-            "и он начинается сразу под строкой ("
+        H.ok(rect ~= nil and rect.top >= -(ns.TabNow.SECTION_H + 4),
+            "и он стоит сразу под заголовком раздела ("
             .. string.format("%.0f", rect and rect.top or 0) .. ")")
     end
 
@@ -1073,7 +1086,7 @@ do
         for key, chip in pairs(tab.profileChips) do
             parts[#parts + 1] = { "профиль «" .. ns.PROFILE_LABEL[key] .. "»", chip }
         end
-        H.ok(S.plain(tab.summary:GetText() or ""):find("рецепт") ~= nil,
+        H.ok(S.plain(tab.summary:GetText() or ""):find("совет") ~= nil,
             "при ширине " .. width .. " строка статистики непустая: "
             .. S.plain(tab.summary:GetText() or ""))
         for i = 1, #parts do
@@ -1082,6 +1095,11 @@ do
                 local b = S.rectOf(parts[j][2], tab.frame)
                 checked = checked + 1
                 local ox, oy = S.rectOverlap(a, b)
+                -- Чего на экране нет (подпись «Что важнее:» в узком окне
+                -- уступает место вкладкам), то ни на что и не налезает.
+                if parts[i][2].__shown == false or parts[j][2].__shown == false then
+                    ox, oy = 0, 0
+                end
                 if ox > 0 and oy > 0 then
                     clash[#clash + 1] = width .. "px: «" .. parts[i][1] .. "» и «"
                         .. parts[j][1] .. "» на " .. string.format("%.0f x %.0f", ox, oy)
@@ -1107,12 +1125,13 @@ do
     local NEED = "Торговец: Mister Graphed, Лесоречье, 78.2 51.9."
         .. " Выставляется ли эта вещь на аукцион, я пока не проверил: клиент"
         .. " ещё не отдал её данные."
-    local card
-    for _, c in ipairs(ns.ActionEngine.cards or {}) do
-        if not card then card = c end
-    end
-    H.ok(card ~= nil, "карточка для разметки есть")
-    card.why, card.need = WHY, NEED
+    -- Совет того вида, у которого своих строк «подпись - значение» нет:
+    -- карточка показывает его текст, и проверяется именно текст.
+    local card = {
+        kind = ns.KIND.RESELL, key = "test:resell", title = "Перекупить: Шёлковая ткань",
+        benefit = "+8з 80с за штуку", benefitKind = "gold",
+        why = WHY, need = NEED, action = { kind = "noop" },
+    }
     local row = ns.Card.Acquire(ns.TabNow.content, 1)
     row:SetWidth(640)
     ns.Card.Fill(row, card)
@@ -1122,17 +1141,24 @@ do
     H.eq(rawget(row, "why"), nil, "строки «почему» в списке нет")
     H.eq(rawget(row, "need"), nil, "и строки «чего не хватает» тоже")
 
-    -- А В КАРТОЧКЕ СПРАВА ОБЕ ФРАЗЫ СТОЯТ ЦЕЛИКОМ: там перенос строк, и резать
-    -- нечего - ни сумму, ни координаты торговца.
+    -- А В КАРТОЧКЕ СПРАВА - СУТЬ, ЦЕЛЫМИ ФРАЗАМИ. Оговорки об источнике числа
+    -- («оценка, возраст неизвестен», «наличие я не проверял») убраны: игрок
+    -- назвал их лишними (2026-11-21). Но ни одна сумма и ни одни координаты
+    -- при этом не разрезаны - фраза либо стоит целиком, либо её нет.
     S.layout(env)
     ns.TabNow:SelectCard(card)
     local detail = ns.Detail
     H.eq(detail.card, card, "совет открыт в карточке справа")
-    H.eq(detail.why.__shown, true, "«почему» в карточке показано")
-    H.eq(S.plain(detail.why:GetText() or ""), WHY, "и стоит целиком, без обрезки")
-    H.eq(detail.need.__shown, true, "«чего не хватает» в карточке показано")
+    H.eq(detail.lead.__shown, true, "суть совета в карточке показана")
+    local lead = S.plain(detail.lead:GetText() or "")
+    H.eq(lead, "У торговца ~60с, на аукционе дают 9з 40с."
+        .. " Разница +8з 80с за штуку, это 1468% наценки.",
+        "и стоит целыми фразами, с целыми числами")
+    H.eq(lead:find("возраст", 1, true), nil, "оговорки об источнике числа в ней нет")
+    H.eq(detail.need.__shown, true, "«что сделать» в карточке показано")
     local need = S.plain(detail.need:GetText() or "")
-    H.eq(need, NEED, "и тоже целиком")
+    H.ok(need:find("Торговец: Mister Graphed, Лесоречье, 78.2 51.9.", 1, true) ~= nil,
+        "фраза с торговцем стоит целиком: " .. need)
     H.ok(need:find("78.2 51.9", 1, true) ~= nil,
         "координаты остались целыми: " .. need)
 
@@ -1140,12 +1166,31 @@ do
     card.why = WHY .. " Числа этой карточки не сходятся — проверьте цену на месте."
     ns.Card.Fill(row, card)
     ns.TabNow:SelectCard(card)
-    local doubted = S.plain(detail.why:GetText() or "")
+    local doubted = S.plain(detail.lead:GetText() or "")
     H.ok(doubted:find("не сходятся", 1, true) ~= nil,
         "оговорка осталась на экране: " .. doubted)
     H.ok(doubted:find("1468%", 1, true) ~= nil, "и стоит рядом со своим числом")
 
-    -- А полный текст - под курсором, целиком.
+    -- И ДАЖЕ ТАМ, ГДЕ ТЕКСТ «ЧТО СДЕЛАТЬ» ЗАМЕНЁН СТРОКАМИ (у совета с планом
+    -- крафта его заменяет блок покупок), координаты и предупреждения из него
+    -- не пропадают.
+    local planned = {
+        kind = ns.KIND.CRAFT_MAT, key = "test:planned", title = "Скрафтить: Рулон ткани",
+        benefit = "+1 навык", why = "Нужен для двух советов.", need = NEED,
+        action = { kind = "noop" },
+        plan = { ready = false, cost = 150, crafts = {},
+                 shopping = { { itemID = 2589, qty = 3, unit = 50, subtotal = 150,
+                                src = "auctionator" } } },
+    }
+    local sheet = ns.Card.Sheet(planned)
+    H.eq(#sheet.blocks, 1, "у совета с планом крафта есть блок покупок")
+    H.ok(sheet.need:find("78.2 51.9", 1, true) ~= nil,
+        "и координаты из его текста остались: " .. tostring(sheet.need))
+    H.eq(sheet.need:find("не проверил", 1, true), nil,
+        "а остальное из этого текста уже сказано блоком покупок")
+
+    -- Под курсором у строки списка совет не пересказывается: там то, что в
+    -- строке не поместилось, и подсказка предмета.
     local tip = {}
     env.G.GameTooltip.AddLine = function(_, text) tip[#tip + 1] = S.plain(text) end
     env.G.GameTooltip.AddDoubleLine = function() end
@@ -1154,8 +1199,8 @@ do
     H.ok(enter ~= nil, "у строки списка есть подсказка")
     if enter then pcall(enter, row) end
     local joined = table.concat(tip, "\n")
-    H.ok(joined:find(NEED, 1, true) ~= nil,
-        "в подсказке полный текст того, что укорочено")
+    H.eq(joined:find("я не стоял", 1, true), nil,
+        "оговорок об источнике под курсором тоже нет")
 
     -- ТО ЖЕ ПРАВИЛО ТАМ, ГДЕ РЕЖУТ ПО СИМВОЛАМ: подпись стрелки и свёрнутая
     -- панель. U.truncate режет ровно по счёту и попадает в середину номера.
@@ -1240,11 +1285,12 @@ do
                 .. "»: в подсказке длинного объяснения нет")
             H.eq(ns.Util.contains(joined, "написано в строке под ним"), false,
                 "   и его второй половины тоже")
-            H.ok(ns.Util.contains(joined, "Достоверность"),
-                "   а нужное в подсказке осталось")
-            -- А ОДНА СТРОКА ПРО ЭТОТ РЕЦЕПТ - НА МЕСТЕ: именно её и не хватало.
-            H.ok(ns.Util.contains(joined, "айдите"),
-                "   и сказано, что рецепт надо найти самому")
+            -- А ОДНА СТРОКА ПРО ЭТОТ РЕЦЕПТ - В КАРТОЧКЕ СОВЕТА, на месте
+            -- кнопки: именно её и не хватало.
+            ns.TabNow:SelectCard(card)
+            H.ok(ns.Detail.note.__shown
+                and ns.Util.contains(ns.Detail.note:GetText() or "", "айдите"),
+                "   а в карточке совета сказано, что рецепт надо найти самому")
         end
     end
     H.ok(withRecipe > 0, "советы с рецептом в списке есть: " .. withRecipe)
@@ -1301,7 +1347,7 @@ do
         "слова «закупка» в ней больше нет: " .. text)
     H.ok(ns.Util.contains(text, "материал"),
         "сказано, за что эти деньги — за материалы: " .. text)
-    H.ok(ns.Util.contains(text, "по советам"),
+    H.ok(ns.Util.contains(text, "по всем советам"),
         "и откуда взялся список — из советов этого экрана: " .. text)
 end
 

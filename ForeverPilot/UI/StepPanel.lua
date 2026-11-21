@@ -34,6 +34,10 @@ local W = ns.Widgets
 local Panel = {}
 ns.StepPanel = Panel
 
+Panel.HEIGHT = 110           -- развёрнутая панель
+Panel.HEIGHT_COLLAPSED = 24  -- свёрнутая: одна строка
+Panel.DETAIL_H = 30          -- две строки пояснения
+
 Panel.WIDTH_MIN, Panel.WIDTH_MAX = 220, 460
 -- Просвет между «Дальше» и кнопками «свернуть»/«убрать» в заголовке панели.
 Panel.NEXT_GAP = 14
@@ -129,7 +133,9 @@ function Panel:Build()
     f:SetFrameStrata("MEDIUM")
     f:SetClampedToScreen(true)
     f:Hide()
-    W.Backdrop(f, 0.05, 0.05, 0.07, 0.88, 0.14)
+    -- Тот же ночной синий, что у окна: панель и окно - один аддон.
+    local T = W.THEME
+    W.Backdrop(f, T.bg[1], T.bg[2], T.bg[3], 0.96, 0.16)
 
     -- Hover on the HIGHLIGHT layer: the client toggles it for us.
     local hl = f:CreateTexture(nil, "HIGHLIGHT")
@@ -145,7 +151,7 @@ function Panel:Build()
     f.spine = spine
 
     -- Header: a tiny title that doubles as the drag handle hint.
-    f.header = W.Label(f, "Сейчас", W.FONT_SMALL, 0.55, 0.55, 0.55)
+    f.header = W.Label(f, "Сейчас", W.FONT_CAPTION, T.muted[1], T.muted[2], T.muted[3])
     f.header:SetPoint("TOPLEFT", 10, -7)
 
     -- ЗАКРЫТЬ И СВЕРНУТЬ - ЭТО ДВА РАЗНЫХ ДЕЙСТВИЯ, И ОБА ДОЛЖНЫ БЫТЬ.
@@ -159,7 +165,7 @@ function Panel:Build()
     f.close = W.Button(f, ns.GLYPH.CLOSE, 18, 14, function() Panel:CloseByPlayer() end)
     f.close:SetPoint("TOPRIGHT", -8, -6)
     f.close:SetScript("OnEnter", function(self2)
-        self2.fpBG:SetColorTexture(0.45, 0.18, 0.18, 0.95)
+        self2:Wash(0.45, 0.18, 0.18, 0.95)
         W.ShowTip(self2, "Убрать панель", {
             "Советы считаться не перестанут — исчезнет только эта панель.",
             Panel:HowToShow(),
@@ -190,7 +196,7 @@ function Panel:Build()
     f.icon:SetPoint("TOPLEFT", 10, -22)
     f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-    f.benefit = W.Label(f, "", W.FONT_SMALL)
+    f.benefit = W.Label(f, "", W.FONT_CAPTION)
     f.benefit:SetPoint("TOPRIGHT", -8, -23)
     f.benefit:SetJustifyH("RIGHT")
 
@@ -200,12 +206,12 @@ function Panel:Build()
     f.title:SetJustifyH("LEFT")
     f.title:SetWordWrap(false)
 
-    f.detail = W.Label(f, "", W.FONT_SMALL, 0.72, 0.72, 0.72)
+    f.detail = W.Label(f, "", W.FONT_CAPTION, T.dim[1], T.dim[2], T.dim[3])
     f.detail:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
     f.detail:SetPoint("RIGHT", f, "RIGHT", -8, 0)
     f.detail:SetJustifyH("LEFT")
     f.detail:SetWordWrap(true)
-    f.detail:SetHeight(26)
+    f.detail:SetHeight(Panel.DETAIL_H)
 
     -- Buttons row. The route button appears only when there is a place to go
     -- AND something to draw the arrow with.
@@ -256,9 +262,6 @@ function Panel:Build()
     f.action = W.Button(f, "", 104, 18, function() Panel:DoAction() end)
     f.action:SetPoint("BOTTOMRIGHT", -8, 8)
     f.action:Hide()
-
-    f.badge = W.ConfBadge(f, ns.CONF.UNKNOWN)
-    f.badge:SetPoint("BOTTOMRIGHT", f.action, "BOTTOMLEFT", -6, 0)
 
     -- Drag. Shift is not required; the player can lock it in settings.
     f:SetMovable(true)
@@ -320,7 +323,8 @@ function Panel:Build()
         if not ns.Config:Get().panel.locked then
             table.insert(lines, 1, "Потяните, чтобы передвинуть")
         end
-        if card and card.why then table.insert(lines, 1, card.why) end
+        local why = card and U.essence(card.why or "", 2) or ""
+        if why ~= "" then table.insert(lines, 1, why) end
         -- Почему у совета нет своей кнопки (если нет): та же строка, что в окне.
         local actionNote = card and ns.Card.ActionNote(card)
         if actionNote then lines[#lines + 1] = actionNote end
@@ -350,7 +354,7 @@ function Panel:ApplySize()
     local width = U.clamp(cfg.panel.width or 300, Panel.WIDTH_MIN, Panel.WIDTH_MAX)
     self.frame:SetWidth(width)
     self.frame:SetScale(U.clamp(cfg.panel.scale or 1, 0.7, 1.6))
-    self.frame:SetHeight(cfg.panel.collapsed and 24 or 104)
+    self.frame:SetHeight(cfg.panel.collapsed and Panel.HEIGHT_COLLAPSED or Panel.HEIGHT)
 end
 
 -- Saved as two numbers from the screen's bottom-left, which survives a
@@ -410,7 +414,7 @@ function Panel:ApplyCollapsed()
     local collapsed = ns.Config:Get().panel.collapsed
     local f = self.frame
     for _, part in ipairs({ f.icon, f.title, f.detail, f.benefit, f.route,
-                            f.next, f.action, f.badge }) do
+                            f.next, f.action }) do
         if collapsed then part:Hide() else part:Show() end
     end
     f.collapse:SetLabel(collapsed and "+" or "—")
@@ -556,7 +560,6 @@ function Panel:RenderCard(card)
         f.next:Hide()
         f.action:Hide()
         f.header:SetText("Сейчас")
-        f.badge:Set(ns.CONF.UNKNOWN)
 
         -- «ПОКА НЕЧЕГО СОВЕТОВАТЬ» - ЭТО УТВЕРЖДЕНИЕ, И ОНО БЫВАЕТ ЛОЖНЫМ.
         --
@@ -625,19 +628,18 @@ function Panel:RenderCard(card)
     end
 
     -- The panel has room for one explanatory line, so it shows what is missing
-    -- when something is missing, and why otherwise.
+    -- when something is missing, and why otherwise. Текст - суть без оговорок
+    -- об источнике чисел (U.essence), как и в окне.
     local detail = card.need
     if card.plan and card.plan.ready then detail = card.why end
-    f.detail:SetText(detail or card.why or "")
-
-    f.badge:Set(card.conf)
-    f.badge:Show()
+    local short = U.essence(detail or card.why or "", 1)
+    if short == "" then short = U.essence(card.why or "", 1) end
+    f.detail:SetText(short)
 
     -- ОДНА КНОПКА СПРАВА, И ПОДПИСАНА ОНА ТЕМ, ЧТО СДЕЛАЕТ.
     --
-    -- Три кнопки плюс значок достоверности в панель шириной 220-460 не влезают,
-    -- а прятать значок достоверности нельзя - он и есть главное обещание этого
-    -- аддона. Поэтому справа внизу ровно одна кнопка:
+    -- Три кнопки в панель шириной 220-460 не влезают. Поэтому справа внизу
+    -- ровно одна кнопка:
     --   * есть своё действие у совета - подписана им («Вернуть все»,
     --     «Показать предмет», «В список покупок»);
     --   * нет - «Открыть»: полное окно, где совет написан целиком.
@@ -653,8 +655,6 @@ function Panel:RenderCard(card)
     -- обрезанная подпись - это снова текст, который врёт о том, что видно.
     local rightWidth = ((right.text and right.text:GetStringWidth()) or 70) + 16
     right:SetWidth(U.clamp(rightWidth, 64, 150))
-    f.badge:ClearAllPoints()
-    f.badge:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT", -6, 0)
 
     local canRoute = card.place and card.place.routable and ns.Places:CanRoute()
     local routeLabel
@@ -673,16 +673,14 @@ end
 --
 -- Ширины кнопок считаются по подписям, и подписи бывают длинные: «В список
 -- покупок» справа и живое показание стрелки «Тернистая долина, 420 м» слева.
--- На панели в 220 пикселей они бы наехали друг на друга и на значок
--- достоверности - то есть на экране оказалось бы три подписи поверх одной
--- другой, и ни одну нельзя прочесть.
+-- На панели в 220 пикселей они бы наехали друг на друга - то есть на экране
+-- оказалось бы две подписи поверх одной другой, и ни одну нельзя прочесть.
 --
 -- Порядок уступок осознанный: сначала сжимается кнопка пути, потом она
--- пропадает совсем. Значок достоверности и кнопка действия не уступают
--- никогда: без первого аддон перестаёт честно говорить, чего он не знает, а
--- второй - то самое единственное дело, ради которого панель существует.
--- Место, которое занимает пропавшая кнопка пути, не теряется: само место
--- написано в строке «detail», а полный адрес - в подсказке при наведении.
+-- пропадает совсем. Кнопка действия не уступает никогда: это то самое
+-- единственное дело, ради которого панель существует. Место, которое занимает
+-- пропавшая кнопка пути, не теряется: само место написано в строке «detail»,
+-- а полный адрес - в подсказке при наведении.
 Panel.ROW_PAD = 18          -- отступы по краям строки
 Panel.ROW_GAP = 8           -- просвет между кнопкой пути и значком
 Panel.ROUTE_MIN = 72        -- уже этого кнопка пути нечитаема
@@ -702,8 +700,7 @@ function Panel:LayoutRow(right, routeLabel)
     wanted = U.clamp(wanted, Panel.ROUTE_MIN, Panel.ROUTE_MAX)
 
     local total = f:GetWidth() or 300
-    local taken = (right:GetWidth() or 72) + (f.badge:GetWidth() or 44)
-        + Panel.ROW_PAD + Panel.ROW_GAP + 6
+    local taken = (right:GetWidth() or 72) + Panel.ROW_PAD + Panel.ROW_GAP
     local room = total - taken
 
     if room < Panel.ROUTE_MIN then

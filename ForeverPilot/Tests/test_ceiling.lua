@@ -416,9 +416,17 @@ do
     local screen = {}
     for i, t in ipairs(texts) do screen[i] = S.plain(t) end
     screen = table.concat(screen, "\n")
-    H.ok(U.contains(screen, "у торговца, экономия"),
-        "строка списка помечена: у торговца дешевле, и на сколько")
-    H.ok(U.contains(screen, "дешевле взять у торговца"),
+    -- Позиция стоит в списке под заголовком «У торговца», а не под «На
+    -- аукционе»: идти за ней надо к торговцу, и видно это там же, где цена.
+    local vendorLines = {}
+    for _, line in ipairs(ns.ShoppingList:Lines()) do
+        if line.src == "vendor" then vendorLines[#vendorLines + 1] = line.name end
+    end
+    H.ok(#vendorLines > 0, "в списке есть позиция от торговца: "
+        .. table.concat(vendorLines, ", "))
+    H.ok(U.contains(screen, ns.TabCraft.SHOP_CAPTION.vendor),
+        "и на экране она стоит под заголовком «" .. ns.TabCraft.SHOP_CAPTION.vendor .. "»")
+    H.ok(U.contains(screen, "дешевле, чем на аукционе"),
         "а под списком — итог по всем таким позициям")
     -- Нить просят два совета по 4 штуки, в сумках её нет: 80м x 8 = 6с 40м.
     H.ok(U.contains(screen, "6с 40м"),

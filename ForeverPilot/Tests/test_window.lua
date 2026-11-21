@@ -13,9 +13,9 @@
 --   1. щелчок по строке списка ВЫБИРАЕТ совет и ничего не запускает; действие -
 --      только на кнопке в карточке справа;
 --   2. золотая кнопка на экране одна;
---   3. в карточке совет стоит целиком: название, «почему», «чего не хватает» -
---      без обрезки, и ничто там ни на что не налезает, ни в обычном окне, ни в
---      самом маленьком;
+--   3. в карточке совета всё, что она решила показать (Card.Sheet), показано
+--      целиком, и ничто там ни на что не налезает, ни в обычном окне, ни в
+--      самом маленьком; оговорок об источнике чисел в ней нет;
 --   4. счётчики фильтра слева - это ровно то, что фильтр покажет;
 --   5. окно открыли, а под запомненный фильтр не попало ничего - показывается
 --      всё (тот самый скриншот);
@@ -23,15 +23,18 @@
 --      трогает движок - иначе по списку нельзя было бы ходить без рывков;
 --   7. прежний сохранённый размер окна (720 на 560) меньше нового минимума - окно
 --      открывается размером по умолчанию, а не зажатым;
---   8. свой значок ставится только когда клиент уже видит новый файл - до
---      перезапуска игры стоит запасной, а не зелёный квадрат.
+--   8. свой значок, свой шрифт и свои картинки ставятся только когда клиент
+--      уже видит новые файлы - до перезапуска игры окно рисуется шрифтами игры
+--      и без значков, а не зелёными квадратами и пустыми строками;
+--   9. окно не бывает больше экрана: ни при растягивании, ни при открытии с
+--      сохранённым размером (игрок растянул его за край и не смог вернуть).
 local H = ...
 local S = assert(loadfile((H.ROOT or ".") .. "/Tests/uistub.lua"))()
 
 return function()
 
-local function fresh(prepare)
-    local env = S.load(H)
+local function fresh(prepare, opts)
+    local env = S.load(H, opts)
     if prepare then prepare(env) end
     S.populate(env, H)
     return env
@@ -154,42 +157,30 @@ do
     H.ok(checked >= 4, "советов проверено: " .. checked)
     H.ok(worst <= 1, "больше одной золотой кнопки не было ни разу")
 
-    -- И на остальных разделах золотых кнопок нет: главное действие - у совета.
+    -- И на остальных разделах золотая кнопка тоже не больше чем одна (в
+    -- «Крафте» это «Искать на аукционе», когда аукцион открыт).
     for _, def in ipairs(ns.MainFrame.TABS) do
         if def.key ~= "NOW" then
             ns.MainFrame:Select(def.key)
             ns.MainFrame:RenderActive()
-            H.eq(#primaryButtons(env, ns.MainFrame.frame), 0,
-                "раздел «" .. def.label .. "»: золотых кнопок нет")
+            H.ok(#primaryButtons(env, ns.MainFrame.frame) <= 1,
+                "раздел «" .. def.label .. "»: золотых кнопок не больше одной")
         end
     end
 end
 
--- Части карточки, которые сейчас на экране, с прямоугольниками.
+-- Части карточки, которые сейчас на экране, с прямоугольниками: один перечень
+-- на все проверки (Tests/uistub.lua, S.detailParts).
 local function detailParts(ns)
-    local d = ns.Detail
-    local out = {}
-    for _, item in ipairs({
-        { "вид совета", d.kind }, { "иконка", d.iconHit }, { "название", d.title },
-        { "выгода", d.benefit }, { "достоверность", d.badge }, { "почему", d.why },
-        { "чего не хватает", d.need }, { "подробности", d.facts },
-        { "что сделать самому", d.note }, { "место в списке", d.place },
-        { "кнопка действия", d.action }, { "кнопка пути", d.route },
-    }) do
-        local el = item[2]
-        if el and el.__shown then
-            out[#out + 1] = { name = item[1], el = el, rect = S.rectOf(el, d.frame) }
-        end
-    end
-    return out
+    return S.detailParts(ns)
 end
 
-H.suite("Окно: в карточке совета ничто ни на что не налезает")
-do
-    local sizes = { { 980, 600, "обычное окно" }, { 1280, 760, "большое окно" } }
-    local env = fresh()
-    local ns = open(env)
-    sizes[#sizes + 1] = { ns.MainFrame.MIN_WIDTH, ns.MainFrame.MIN_HEIGHT, "самое маленькое окно" }
+-- Сверка разметки карточки для всех советов списка при нескольких размерах
+-- окна. Одна и та же для обоих видов окна: шрифтами игры (до перезапуска) и
+-- своим шрифтом со значками (после).
+local function checkDetailGeometry(env, ns, label)
+    local sizes = { { 980, 600, "обычное окно" }, { 1280, 760, "большое окно" },
+                    { ns.MainFrame.MIN_WIDTH, ns.MainFrame.MIN_HEIGHT, "самое маленькое окно" } }
     for _, size in ipairs(sizes) do
         S.layout(env, size[1], size[2])
         ns.MainFrame:RenderActive()
@@ -207,8 +198,8 @@ do
                     if one.rect.left < -0.5 or one.rect.right > ns.TabNow.DETAIL_W + 0.5
                         or one.rect.top > 0.5 or one.rect.bottom < -hostH - 0.5 then
                         outside[#outside + 1] = "«" .. title .. "»: «" .. one.name .. "» за краем карточки ("
-                            .. string.format("%.0f..%.0f по высоте при %d", -one.rect.top,
-                                -one.rect.bottom, hostH) .. ")"
+                            .. string.format("%.0f..%.0f по высоте при %d, %.0f..%.0f по ширине",
+                                -one.rect.top, -one.rect.bottom, hostH, one.rect.left, one.rect.right) .. ")"
                     end
                     for j = i + 1, #parts do
                         local two = parts[j]
@@ -224,40 +215,87 @@ do
                 end
             end
         end
-        H.ok(checked > 40, size[3] .. " " .. size[1] .. "x" .. size[2] .. ": пар сверено " .. checked)
-        H.eq(#clash, 0, size[3] .. ": ничто ни на что не налезает"
+        local where = label .. ", " .. size[3]
+        H.ok(checked > 40, where .. " " .. size[1] .. "x" .. size[2] .. ": пар сверено " .. checked)
+        H.eq(#clash, 0, where .. ": ничто ни на что не налезает"
             .. ((#clash > 0) and ("  <- " .. table.concat(clash, "; ", 1, math.min(4, #clash))) or ""))
-        H.eq(#outside, 0, size[3] .. ": всё лежит внутри карточки"
+        H.eq(#outside, 0, where .. ": всё лежит внутри карточки"
             .. ((#outside > 0) and ("  <- " .. table.concat(outside, "; ", 1, math.min(4, #outside))) or ""))
     end
 end
 
-H.suite("Окно: в карточке совет стоит целиком, без обрезки")
+H.suite("Окно: в карточке совета ничто ни на что не налезает")
+do
+    -- Шрифтами игры и без значков - так окно выглядит до перезапуска игры.
+    local env = fresh()
+    local ns = open(env)
+    H.eq(ns.Widgets.ready, false, "своих файлов клиент не видит: окно на шрифтах игры")
+    checkDetailGeometry(env, ns, "шрифты игры")
+
+    -- И своим шрифтом со значками - так оно выглядит после перезапуска.
+    local env2 = fresh(nil, { media = true })
+    local ns2 = open(env2)
+    H.eq(ns2.Widgets.ready, true, "свои файлы клиент видит: шрифт и значки свои")
+    checkDetailGeometry(env2, ns2, "свой шрифт")
+end
+
+-- Слова, которыми аддон рассказывает, откуда число и насколько ему верить.
+-- На экране советов их быть не должно (жалоба игрока 2026-11-21: «мне не нужно
+-- знать, откуда ты брал эти данные»).
+local PROVENANCE = { "из кеша", "кеш", "возраст неизвестен", "не стареет", "час назад",
+                     "дней назад", "дня назад", "день назад", "Достоверность",
+                     "Место в общем списке", "выборка короткая", "сбор аукциона",
+                     "Откуда числа", "наблюдений" }
+
+H.suite("Окно: в карточке совета показано всё, что она решила показать")
 do
     local env = fresh()
     local ns = open(env)
-    local checked = 0
+    local checked, withRows, withBlocks = 0, 0, 0
     for _, row in ipairs(shownRows(ns)) do
         local card = row.card
         S.pick(ns, row)
         local d = ns.Detail
+        local sheet = ns.Card.Sheet(card)
         local name = ns.Util.truncate(tostring(card.title), 24)
         H.eq(S.plain(d.title:GetText() or ""), S.plain(tostring(card.title or "")),
             "«" .. name .. "»: название целиком")
-        if tostring(card.why or "") ~= "" then
-            H.eq(d.why.__shown, true, "«" .. name .. "»: «почему» показано")
-            H.eq(S.plain(d.why:GetText() or ""), S.plain(tostring(card.why)),
-                "   и целиком")
-        end
-        if tostring(card.need or "") ~= "" then
-            H.eq(d.need.__shown, true, "«" .. name .. "»: «чего не хватает» показано")
-            H.eq(S.plain(d.need:GetText() or ""), S.plain(tostring(card.need)),
-                "   и целиком")
-        end
         if tostring(card.benefit or "") ~= "" then
-            H.eq(S.plain(d.benefit:GetText() or ""), S.plain(tostring(card.benefit)),
+            local shown = d.benefit.__shown and d.benefit.text:GetText()
+                or (d.benefitLine.__shown and d.benefitLine:GetText()) or ""
+            H.eq(S.plain(shown), S.plain(tostring(card.benefit)),
                 "«" .. name .. "»: выгода целиком")
         end
+        -- Тексты - ровно те, что собрала Card.Sheet, без обрезки по высоте.
+        for _, part in ipairs({ { "сомнение", sheet.warn, d.warn }, { "суть", sheet.lead, d.lead },
+                                { "что сделать", sheet.need, d.need } }) do
+            if part[2] ~= "" then
+                H.eq(part[3].__shown, true, "«" .. name .. "»: «" .. part[1] .. "» показано")
+                H.eq(S.plain(part[3]:GetText() or ""), S.plain(part[2]), "   и целиком")
+            else
+                H.eq(part[3].__shown, false, "«" .. name .. "»: пустого «" .. part[1] .. "» на экране нет")
+            end
+        end
+        -- Строки «подпись - значение»: все, по порядку.
+        for i, want in ipairs(sheet.rows) do
+            local slot = d.rows[i]
+            H.ok(slot ~= nil and slot.value.__shown, "«" .. name .. "»: строка «" .. want.label .. "» показана")
+            if slot then
+                H.eq(S.plain(slot.label:GetText() or ""), want.label, "   подпись та же")
+                H.eq(S.plain(slot.value:GetText() or ""), S.plain(want.value), "   и значение целиком")
+            end
+        end
+        if #sheet.rows > 0 then withRows = withRows + 1 end
+        -- Блоки покупок: в обычном окне помещаются все позиции.
+        local lines = 0
+        for _, block in ipairs(sheet.blocks) do lines = lines + #block.lines end
+        local shownLines = 0
+        for _, item in ipairs(d.items) do
+            if item.left.__shown then shownLines = shownLines + 1 end
+        end
+        H.eq(shownLines, lines, "«" .. name .. "»: позиций покупки показано столько, сколько есть (" .. lines .. ")")
+        H.eq(d.more.__shown, false, "   и строки «и ещё N» нет")
+        if lines > 0 then withBlocks = withBlocks + 1 end
         -- Кнопка есть - значит, на ней подпись совета; кнопки нет у совета про
         -- рецепт - значит, на её месте сказано, что сделать самому.
         if d.action.__shown then
@@ -266,33 +304,60 @@ do
         elseif card.action and card.action.kind == "findRecipe" then
             H.eq(d.note.__shown, true, "«" .. name .. "»: вместо кнопки сказано, что сделать")
         end
+        -- И ни в одной части карточки нет рассказа о том, откуда число.
+        for _, part in ipairs(d:Shown()) do
+            local text = S.plain(part.fs:GetText() or "")
+            for _, word in ipairs(PROVENANCE) do
+                H.eq(text:find(word, 1, true), nil, "«" .. name .. "»: в «" .. part.role
+                    .. "» нет слов «" .. word .. "»: " .. ns.Util.truncate(text, 60))
+            end
+        end
         checked = checked + 1
     end
     H.ok(checked >= 4, "советов проверено: " .. checked)
+    H.ok(withRows >= 1, "и среди них есть советы со строками «подпись - значение»: " .. withRows)
+    H.ok(withBlocks >= 1, "и с блоком покупок: " .. withBlocks)
 end
 
-H.suite("Окно: в низком окне «чего не хватает» не теряется за длинным «почему»")
+H.suite("Окно: в низком окне длинный список покупок не вытесняет то, что надо сделать")
 do
     local env = fresh()
     local ns = open(env, nil, nil)
     S.layout(env, ns.MainFrame.MIN_WIDTH, ns.MainFrame.MIN_HEIGHT)
     ns.MainFrame:RenderActive()
-    local card = shownRows(ns)[1].card
-    local LONG = string.rep("Очень длинное объяснение, почему это стоит сделать именно сейчас. ", 30)
-    card.why = LONG
-    card.need = "Торговец: Кварц, Тернистая долина, 34.0 76.0."
+    local shopping = {}
+    for i = 1, 14 do
+        shopping[i] = { itemID = 2589, qty = i, unit = 50, subtotal = 50 * i, src = "auctionator" }
+    end
+    local card = {
+        kind = ns.KIND.CRAFT_MAT, key = "test:low", title = "Скрафтить: Очень нужная вещь",
+        benefit = "+1 навык", benefitKind = "skill",
+        why = "Нужна для трёх советов сразу.",
+        need = "Торговец: Кварц, Тернистая долина, 34.0 76.0.",
+        action = { kind = "noop" },
+        plan = { ready = false, cost = 5250, crafts = {}, shopping = shopping },
+    }
     ns.TabNow:SelectCard(card)
     local d = ns.Detail
-    H.eq(d.need.__shown, true, "«чего не хватает» на экране")
-    H.eq(S.plain(d.need:GetText() or ""), card.need, "и целиком, с координатами")
-    H.eq(d.why.__shown, true, "«почему» тоже на экране - сколько влезло")
     local _, hostH = ns.MainFrame:HostNow()
-    local whyRect, needRect = S.rectOf(d.why, d.frame), S.rectOf(d.need, d.frame)
-    H.ok(whyRect.bottom >= needRect.top - 0.5, "«почему» кончается выше, чем начинается «чего не хватает»")
+    H.eq(d.need.__shown, true, "фраза с торговцем на экране")
+    H.eq(S.plain(d.need:GetText() or ""), card.need, "и целиком, с координатами")
+    local shownLines, lastBottom = 0, 0
+    for _, item in ipairs(d.items) do
+        if item.left.__shown then
+            shownLines = shownLines + 1
+            local r = S.rectOf(item.left, d.frame)
+            if r and r.bottom < lastBottom then lastBottom = r.bottom end
+        end
+    end
+    H.ok(shownLines >= 1 and shownLines < #shopping,
+        "позиций покупки показано сколько влезло: " .. shownLines .. " из " .. #shopping)
+    H.eq(d.more.__shown, true, "и сказано, сколько не влезло")
+    H.ok(S.plain(d.more:GetText() or ""):find(tostring(#shopping - shownLines), 1, true) ~= nil,
+        "числом: " .. S.plain(d.more:GetText() or ""))
+    local needRect, moreRect = S.rectOf(d.need, d.frame), S.rectOf(d.more, d.frame)
+    H.ok(moreRect.bottom >= needRect.top - 0.5, "список кончается выше, чем начинается эта фраза")
     H.ok(needRect.bottom >= -hostH, "и всё это внутри карточки")
-    H.eq(d.facts.__shown, true, "и сказано, где прочитать остальное")
-    H.ok(S.plain(d.facts:GetText() or ""):find(ns.Detail.MORE_FACTS, 1, true) ~= nil,
-        "словами: " .. S.plain(d.facts:GetText() or ""))
 end
 
 H.suite("Окно: счётчики фильтра — ровно то, что фильтр покажет")
@@ -514,7 +579,7 @@ do
     -- Клиент .toc не перечитал (после /reload так и есть): метки нет.
     local env = fresh()
     local ns = env.ns
-    ns.Api.mediaReady = nil
+    ns.Api.mediaReady, ns.Api.fontsReady = nil, nil
     env.G.C_AddOns = nil
     env.G.GetAddOnMetadata = nil
     H.eq(ns.Api:MediaReady(), false, "метки в .toc клиент не отдаёт - новых файлов он не видит")
@@ -531,11 +596,11 @@ do
     -- Клиент перезапущен: .toc перечитан, метка на месте.
     local env2 = fresh()
     local ns2 = env2.ns
-    ns2.Api.mediaReady = nil
+    ns2.Api.mediaReady, ns2.Api.fontsReady = nil, nil
     local asked
     env2.G.C_AddOns = { GetAddOnMetadata = function(addon, field)
         asked = tostring(addon) .. "/" .. tostring(field)
-        if field == "X-Media" then return ns2.Api.MEDIA_STAMP end
+        if field == "X-Media" then return tostring(ns2.Api.MEDIA_STAMP_ICON) end
         return nil
     end }
     H.eq(ns2.Api:MediaReady(), true, "метка есть - клиент видит новые файлы")
@@ -559,12 +624,11 @@ do
         "клиент сказал «нет» - это услышано")
     H.eq(tex.__texture, "запасной", "и поставлен запасной значок")
 
-    -- И метка в самом .toc - та, которую ждёт код.
+    -- И значок аддона в .toc указан свой, и файл его на месте.
     local toc = assert(io.open((H.ROOT or ".") .. "/ForeverPilot.toc", "r"))
     local text = toc:read("*a")
     toc:close()
-    H.eq(text:match("## X%-Media:%s*(%S+)"), ns2.Api.MEDIA_STAMP, "метка в .toc совпадает с ожидаемой")
-    H.ok(text:find("Media\\Icon", 1, true) ~= nil, "и значок аддона в .toc указан свой")
+    H.ok(text:find("Media\\Icon", 1, true) ~= nil, "значок аддона в .toc указан свой")
     local icon = io.open((H.ROOT or ".") .. "/Media/Icon.tga", "rb")
     H.ok(icon ~= nil, "файл значка лежит в папке аддона")
     if icon then
@@ -576,6 +640,168 @@ do
         H.eq(head:byte(17), 32, "32 бита с прозрачностью")
         H.ok(w == h and (w == 32 or w == 64 or w == 128 or w == 256),
             "сторона - степень двойки: " .. w .. "x" .. h)
+    end
+end
+
+H.suite("Окно: свой шрифт и значки — только когда клиент их действительно видит")
+do
+    -- 1. После /reload без перезапуска: метка в .toc прежняя (значок уже есть,
+    --    шрифта ещё нет). Окно обязано остаться на шрифтах игры.
+    local env = S.load(H)
+    local ns = env.ns
+    ns.Api.mediaReady, ns.Api.fontsReady = nil, nil
+    env.G.C_AddOns = { GetAddOnMetadata = function(_, field)
+        if field == "X-Media" then return tostring(ns.Api.MEDIA_STAMP_ICON) end
+        return nil
+    end }
+    env.G.CreateFont = function(name)
+        local font = env.world.newFrame("Font", name)
+        if name then env.G[name] = font end
+        return font
+    end
+    H.eq(ns.Api:MediaReady(), true, "значок клиент уже видит")
+    H.eq(ns.Api:FontsReady(), false, "а шрифта ещё нет: метка меньше нужной")
+    H.eq(ns.Widgets.InitFonts(), false, "окно остаётся на шрифтах игры")
+    H.eq(ns.Widgets.ready, false, "и значков не рисует")
+
+    -- 2. Метка новая, но шрифт клиент не принял (файла он не нашёл): тоже нет.
+    ns.Api.mediaReady, ns.Api.fontsReady = nil, nil
+    env.G.C_AddOns = { GetAddOnMetadata = function(_, field)
+        if field == "X-Media" then return tostring(ns.Api.MEDIA_STAMP_FONTS) end
+        return nil
+    end }
+    env.world.rejectFonts = true
+    H.eq(ns.Api:FontsReady(), false, "метка есть, а шрифт не загрузился - своих файлов нет")
+    H.eq(ns.Widgets.InitFonts(), false, "и окно остаётся на шрифтах игры")
+    -- Объект шрифта, которому файл не подошёл, шрифтом не считается, даже
+    -- если клиент на SetFont промолчал.
+    local silent = env.world.newFrame("Font", "ТестШрифт")
+    silent.SetFont = function() return nil end
+    H.eq(ns.Api:LoadFont(silent, "Fonts\\FiraSans-Regular.ttf", 12), false,
+        "клиент промолчал, шрифта у объекта нет - не загружен")
+
+    -- 3. Метка новая, шрифт принят: окно на своём шрифте, значки свои.
+    env.world.rejectFonts = false
+    ns.Api.mediaReady, ns.Api.fontsReady = nil, nil
+    H.eq(ns.Api:FontsReady(), true, "метка есть и шрифт загрузился")
+    H.eq(ns.Widgets.InitFonts(), true, "окно переходит на свой шрифт")
+    H.eq(ns.Widgets.ready, true, "и рисует свои значки")
+    for _, def in ipairs(ns.Widgets.FONTS) do
+        local font = env.G[def[2]]
+        H.ok(font ~= nil, "объект шрифта «" .. def[2] .. "» создан")
+        H.eq(ns.Widgets[def[1]], def[2], "   и имя " .. def[1] .. " указывает на него")
+        if font then
+            H.ok(tostring(font.__fontFile):find(def[3], 1, true) ~= nil,
+                "   файл: " .. tostring(font.__fontFile))
+            local file = io.open((H.ROOT or ".") .. "/Media/Fonts/" .. def[3], "rb")
+            H.ok(file ~= nil, "   и этот файл лежит в папке аддона")
+            if file then file:close() end
+        end
+    end
+
+    -- 4. Метка в .toc - та, с которой шрифт разрешён, и лицензия шрифта рядом.
+    local toc = assert(io.open((H.ROOT or ".") .. "/ForeverPilot.toc", "r"))
+    local text = toc:read("*a")
+    toc:close()
+    H.eq(tonumber(text:match("## X%-Media:%s*(%S+)")), ns.Api.MEDIA_STAMP_FONTS,
+        "метка в .toc совпадает с той, которую ждёт код")
+    local licence = io.open((H.ROOT or ".") .. "/Media/Fonts/FiraSans-OFL.txt", "r")
+    H.ok(licence ~= nil, "текст лицензии шрифта лежит рядом с ним")
+    if licence then
+        H.ok(licence:read("*a"):find("SIL Open Font License", 1, true) ~= nil,
+            "и это открытая лицензия OFL")
+        licence:close()
+    end
+
+    -- 5. У каждого значка, который просит код, есть файл.
+    local asked, missing = {}, {}
+    for _, rel in ipairs(S.UI_FILES) do
+        local f = assert(io.open((H.ROOT or ".") .. "/" .. rel, "r"))
+        local src = f:read("*a")
+        f:close()
+        for name in src:gmatch('SetIcon%([^,%)]+,%s*"([%a%-]+)"') do asked[name] = rel end
+        for name in src:gmatch('SetGlyph%(%s*"([%a%-]+)"') do asked[name] = rel end
+        for name in src:gmatch('W%.Icon%([^,%)]+,%s*"([%a%-]+)"') do asked[name] = rel end
+        for name in src:gmatch('glyph = "([%a%-]+)"') do asked[name] = rel end
+    end
+    for _, map in ipairs({ ns.TabNow.CHIP_ICON, ns.Detail.ACTION_ICON }) do
+        for _, name in pairs(map) do asked[name] = "таблица значков" end
+    end
+    local count = 0
+    for name, where in pairs(asked) do
+        count = count + 1
+        local file = io.open((H.ROOT or ".") .. "/Media/icon-" .. name .. ".tga", "rb")
+        if file then file:close() else missing[#missing + 1] = name .. " (" .. where .. ")" end
+    end
+    H.ok(count >= 12, "значков, которые просит код: " .. count)
+    H.eq(#missing, 0, "у каждого есть файл в папке Media"
+        .. ((#missing > 0) and ("  <- " .. table.concat(missing, ", ")) or ""))
+    for _, shape in ipairs({ "round", "pill", "pill-line", "stars" }) do
+        local file = io.open((H.ROOT or ".") .. "/Media/" .. shape .. ".tga", "rb")
+        H.ok(file ~= nil, "картинка «" .. shape .. "» на месте")
+        if file then file:close() end
+    end
+end
+
+H.suite("Окно: не бывает больше экрана")
+do
+    -- Игрок растянул окно за край экрана; угол для изменения размера уехал
+    -- туда же, и вернуть окно стало нечем (2026-11-21).
+    local env = fresh()
+    local ns = env.ns
+    local main = ns.MainFrame
+    local screenW, screenH = env.G.UIParent:GetWidth(), env.G.UIParent:GetHeight()
+
+    -- Сохранён размер больше экрана - окно открывается в его пределах.
+    ns.Config:SaveFrame("CENTER", "CENTER", 0, 0, 5000, 4000)
+    main:Build()
+    H.ok(main.frame:GetWidth() <= screenW, "ширина не больше экрана: "
+        .. main.frame:GetWidth() .. " при " .. screenW)
+    H.ok(main.frame:GetHeight() <= screenH, "высота не больше экрана: "
+        .. main.frame:GetHeight() .. " при " .. screenH)
+    H.ok(main.frame:GetWidth() <= screenW * main.SCREEN_SHARE + 1,
+        "и с запасом до края - угол окна остаётся под рукой")
+
+    -- Пределы растягивания заданы клиенту: и нижний, и верхний.
+    local bounds
+    main.frame.SetResizeBounds = function(_, minW, minH, maxW, maxH)
+        bounds = { minW, minH, maxW, maxH }
+    end
+    main:ApplyResizeBounds()
+    H.ok(bounds ~= nil, "пределы размера переданы клиенту")
+    if bounds then
+        H.eq(bounds[1], main.MIN_WIDTH, "наименьшая ширина")
+        H.ok(bounds[3] ~= nil and bounds[3] <= screenW, "наибольшая ширина задана и не больше экрана: "
+            .. tostring(bounds[3]))
+        H.ok(bounds[4] ~= nil and bounds[4] <= screenH, "наибольшая высота тоже: " .. tostring(bounds[4]))
+    end
+
+    -- Крупный масштаб окна: экран в единицах окна становится меньше.
+    local wide = { main:FitSize(5000, 4000) }
+    ns.Config:SetScale(1.6)
+    local scaled = { main:FitSize(5000, 4000) }
+    H.ok(scaled[1] < wide[1], "при крупном масштабе предел ширины меньше: "
+        .. scaled[1] .. " против " .. wide[1])
+    H.ok(scaled[1] * 1.6 <= screenW + 1, "и окно с этим масштабом всё равно на экране")
+    ns.Config:SetScale(1.0)
+
+    -- Маленький экран (или очень крупный масштаб): побеждает экран, а не
+    -- минимальный размер окна.
+    env.G.UIParent:SetSize(700, 420)
+    local w, h = main:FitSize(main.DEFAULT_WIDTH, main.DEFAULT_HEIGHT)
+    H.ok(w <= 700 and h <= 420, "на маленьком экране окно меньше своего минимума, но целиком видно: "
+        .. w .. "x" .. h)
+    env.G.UIParent:SetSize(screenW, screenH)
+
+    -- Отпустили угол - размер возвращён в пределы, что бы ни вышло из-под мыши.
+    main.frame:SetSize(9000, 9000)
+    local up = main.grip.__scripts.OnMouseUp
+    H.ok(up ~= nil, "у угла есть обработчик отпускания")
+    if up then
+        up(main.grip)
+        H.ok(main.frame:GetWidth() <= screenW and main.frame:GetHeight() <= screenH,
+            "после отпускания окно снова в пределах экрана: "
+            .. main.frame:GetWidth() .. "x" .. main.frame:GetHeight())
     end
 end
 

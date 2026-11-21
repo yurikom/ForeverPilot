@@ -823,54 +823,58 @@ end
 
 H.suite("Вода: над списком не больше одной короткой строки")
 do
-    -- НА ЧЁМ ДЕРЖИТСЯ ЭТА ПРОВЕРКА: хотя бы в двух состояниях строка есть. Без
-    -- этого «ни одной длинной строки» значит «строки не было вовсе» - именно
-    -- так простыня и выросла бы обратно незамеченной.
-    local shown, withCauses = 0, 0
+    -- Над списком когда-то стояла простыня в пять строк, потом - одна строка с
+    -- причинами. Теперь это строка в шапке: «N советов · ещё M не показано», а
+    -- причины - под курсором у неё.
+    --
+    -- НА ЧЁМ ДЕРЖИТСЯ ЭТА ПРОВЕРКА: хотя бы в двух состояниях строка называет
+    -- не показанное. Без этого «ни одной длинной строки» значит «строки не
+    -- было вовсе» - именно так простыня и выросла бы обратно незамеченной.
+    local shown = 0
     for _, s in ipairs(CORPUS.strips) do
         if s.shown then shown = shown + 1 end
     end
-    H.ok(shown >= 2, "состояний, где над списком что-то сказано: " .. shown)
+    H.ok(shown >= 2, "состояний, где в шапке сказано о не показанном: " .. shown)
+    H.ok(#CORPUS.strips >= 14, "состояний с измеренной шапкой: " .. #CORPUS.strips)
 
     -- Обещание игроку, записанное числом: одна строка, не длиннее 110 символов.
     -- Было пять строк и 506 символов в одной из них.
     local LIMIT = 110
-    local tooLong, tooMany, silent, noPath = {}, {}, {}, {}
+    local tooLong, tooMany, silent = {}, {}, {}
     for _, s in ipairs(CORPUS.strips) do
-        if s.shown then
-            if s.lines ~= 1 then
-                tooMany[#tooMany + 1] = s.state .. ": строк " .. s.lines
+        if s.lines > 1 then
+            tooMany[#tooMany + 1] = s.state .. ": строк " .. s.lines
+        end
+        local len = 0
+        for _ in s.text:gmatch("[%z\1-\127\194-\244]") do len = len + 1 end
+        if len > LIMIT then
+            tooLong[#tooLong + 1] = s.state .. ": " .. len .. " символов — " .. s.text
+        end
+        if s.width > s.room + 0.5 then
+            tooLong[#tooLong + 1] = s.state .. ": не влезает (" .. s.width
+                .. " при " .. s.room .. ") — " .. s.text
+        end
+        -- Подробности не стоят на экране второй раз: они под курсором.
+        for _, d in ipairs(s.details) do
+            if #d > 120 and s.text:find(d:sub(1, 60), 1, true) then
+                tooLong[#tooLong + 1] = s.state .. ": подробность попала в строку"
             end
-            local len = 0
-            for _ in s.text:gmatch("[%z\1-\127\194-\244]") do len = len + 1 end
-            if len > LIMIT then
-                tooLong[#tooLong + 1] = s.state .. ": " .. len .. " символов — " .. s.text
-            end
-            if s.width > s.room + 0.5 then
-                tooLong[#tooLong + 1] = s.state .. ": не влезает (" .. s.width
-                    .. " при " .. s.room .. ") — " .. s.text
-            end
-            -- Объявление не превращается в молчание: число есть, и путь к
-            -- подробностям есть, и сами подробности есть.
-            if not s.text:find("%d") then
-                silent[#silent + 1] = s.state .. ": без числа — " .. s.text
+        end
+        -- ОБЪЯВЛЕНИЕ НЕ ПРЕВРАЩАЕТСЯ В МОЛЧАНИЕ. Правила убрали советы - в
+        -- строке стоит их число, и оно верное, а под курсором есть причины.
+        if s.hidden > 0 then
+            if not s.shown then
+                silent[#silent + 1] = s.state .. ": убрано " .. s.hidden
+                    .. ", а в строке об этом ни слова — " .. s.text
+            elseif not s.text:find("ещё " .. s.hidden .. " не показано", 1, true) then
+                silent[#silent + 1] = s.state .. ": число не то (убрано " .. s.hidden
+                    .. ") — " .. s.text
             end
             if #s.details == 0 then
-                silent[#silent + 1] = s.state .. ": подробностей нет вовсе"
+                silent[#silent + 1] = s.state .. ": подробностей под курсором нет"
             end
-            if not s.text:find("наведите мышь", 1, true) then
-                noPath[#noPath + 1] = s.state .. ": путь к подробностям не назван — " .. s.text
-            end
-            -- И подробности не стоят на экране второй раз: они под курсором.
-            for _, d in ipairs(s.details) do
-                if #d > 120 and s.text:find(d:sub(1, 60), 1, true) then
-                    tooLong[#tooLong + 1] = s.state .. ": подробность попала в строку"
-                end
-            end
-        else
-            if #s.details > 0 then
-                silent[#silent + 1] = s.state .. ": подробности есть, а строки нет"
-            end
+        elseif s.shown then
+            silent[#silent + 1] = s.state .. ": сказано о не показанном, которого нет — " .. s.text
         end
     end
     H.eq(#tooMany, 0, "строка ровно одна"
@@ -881,8 +885,6 @@ do
     H.eq(#silent, 0, "и ничего не исчезает молча: число и подробности на месте"
         .. ((#silent > 0) and ("  <- " .. table.concat(silent, "; ", 1,
             math.min(3, #silent))) or ""))
-    H.eq(#noPath, 0, "и путь к подробностям назван в самой строке"
-        .. ((#noPath > 0) and ("  <- " .. table.concat(noPath, "; ")) or ""))
 end
 
 H.suite("Разметка шапки: ничто не нарисовано поверх другого")
@@ -991,7 +993,9 @@ do
     H.eq(#outside, 0, "и ничего не ушло за край карточки"
         .. ((#outside > 0) and ("  <- " .. table.concat(outside, "; ", 1, math.min(4, #outside))) or ""))
 
-    -- И ТЕКСТ В КАРТОЧКЕ - ЦЕЛИКОМ: то, что показано, равно тому, что в совете.
+    -- И ТЕКСТ В КАРТОЧКЕ - ЦЕЛИКОМ: название и выгода - как в совете, а суть,
+    -- строки и «что сделать» - как их собрала Card.Sheet. По высоте ничего не
+    -- обрезано.
     local shortened, compared = {}, 0
     for _, d in ipairs(CORPUS.details) do
         for _, part in ipairs(d.parts) do

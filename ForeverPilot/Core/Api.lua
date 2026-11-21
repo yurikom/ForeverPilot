@@ -1735,17 +1735,28 @@ local function cooldownLeft(fn, itemID, now)
 end
 -- ВИДИТ ЛИ КЛИЕНТ ФАЙЛЫ, КОТОРЫЕ ПОЯВИЛИСЬ В ПАПКЕ АДДОНА.
 --
--- Новый файл (картинку значка) клиент находит только после полного перезапуска
--- игры: список файлов аддона он составляет при старте, и /reload его не
--- обновляет. Текстура из ненайденного файла рисуется зелёным квадратом.
+-- Значок, шрифт и картинки аддона - новые файлы, а новые файлы клиент находит
+-- только после полного перезапуска игры: список файлов аддона он составляет
+-- при старте, и /reload его не обновляет. Текстура из ненайденного файла
+-- рисуется зелёным квадратом, а текст ненайденным шрифтом не рисуется вовсе.
 --
--- Спросить «есть ли файл» у клиента нечем, поэтому спрашиваем то, что читается
--- в тот же момент - сам .toc. В нём стоит метка «X-Media»; если клиент отдаёт
--- её нынешнее значение, значит .toc он перечитал уже после обновления, а с ним
--- и список файлов. Не отдаёт (или функции нет) - считаем, что файлов не видит,
--- и рисуем запасной значок из игры. Ошибиться здесь можно только в сторону
--- старого значка, а не зелёного квадрата.
-Api.MEDIA_STAMP = "1"
+-- Спросить «есть ли файл» у клиента нечем, поэтому сторожей два:
+--
+--   1. МЕТКА В .toc («X-Media»). Она растёт с каждым набором новых файлов.
+--      Клиент отдаёт нынешнее значение - значит, .toc он читал уже после
+--      обновления. Api:MediaReady (значок аддона) верит одной метке: значок
+--      рисуется текстурой, и худшее, что с ним бывает, - запасная картинка.
+--   2. ПРОБА ШРИФТА. Свой шрифт пробуем загрузить по-настоящему, и клиент сам
+--      отвечает, годится ли файл. Api:FontsReady требует И метку, И пробу:
+--      окно, нарисованное шрифтом, которого клиент не видит, - это окно без
+--      единой буквы, и рисковать тут нечем.
+--
+-- Не прошло хотя бы одно - всё рисуется средствами игры: её шрифтами и без
+-- своих значков. Ошибиться здесь можно только в сторону простого вида.
+Api.MEDIA = "Interface\\AddOns\\" .. tostring(ADDON) .. "\\Media\\"
+Api.MEDIA_PROBE = "Fonts\\FiraSans-Regular.ttf"
+Api.MEDIA_STAMP_ICON = 1     -- с этой метки в папке лежит значок аддона
+Api.MEDIA_STAMP_FONTS = 2    -- с этой - шрифт Fira Sans и свои значки
 
 function Api:AddonMeta(field)
     local getMeta = (_G.C_AddOns and _G.C_AddOns.GetAddOnMetadata) or _G.GetAddOnMetadata
@@ -1755,11 +1766,49 @@ function Api:AddonMeta(field)
     return nil
 end
 
+function Api:MediaLevel()
+    return tonumber(Api:AddonMeta("X-Media")) or 0
+end
+
 function Api:MediaReady()
     if Api.mediaReady == nil then
-        Api.mediaReady = (Api:AddonMeta("X-Media") == Api.MEDIA_STAMP)
+        Api.mediaReady = Api:MediaLevel() >= Api.MEDIA_STAMP_ICON
     end
     return Api.mediaReady
+end
+
+-- Загрузить шрифт из файла аддона в объект шрифта. true - клиент шрифт принял.
+--
+-- SetFont отвечает, годится ли файл (истина или пусто). Клиент, который не
+-- отвечает ничего, спрашиваем вторым способом: у объекта шрифта, которому файл
+-- не подошёл, шрифта нет, и GetFont возвращает пусто.
+function Api:LoadFont(font, file, size)
+    local ok, loaded = pcall(function()
+        local path = Api.MEDIA .. file
+        local set = font:SetFont(path, size, "")
+        if set == false then return false end
+        local now = font.GetFont and font:GetFont() or nil
+        if type(now) ~= "string" or now == "" then return false end
+        -- Путь клиент возвращает в своём написании (регистр, косые черты):
+        -- сравниваем по имени файла.
+        local name = file:match("([^\\/]+)$") or file
+        return now:lower():gsub("/", "\\"):find(name:lower(), 1, true) ~= nil
+    end)
+    return (ok and loaded) and true or false
+end
+
+function Api:FontsReady()
+    if Api.fontsReady ~= nil then return Api.fontsReady end
+    Api.fontsReady = false
+    if Api:MediaLevel() < Api.MEDIA_STAMP_FONTS then return false end
+    local create = _G.CreateFont
+    if type(create) ~= "function" then return false end
+    local ok, probe = pcall(function()
+        return _G.ForeverPilotFontProbe or create("ForeverPilotFontProbe")
+    end)
+    if not (ok and probe) then return false end
+    Api.fontsReady = Api:LoadFont(probe, Api.MEDIA_PROBE, 12)
+    return Api.fontsReady
 end
 
 function Api:ItemCooldownRemaining(itemID)

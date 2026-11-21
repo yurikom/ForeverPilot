@@ -450,10 +450,12 @@ function Main:RegisterSlash()
         if msg == "now" or msg == "сейчас" then
             ns.MainFrame:Show(); ns.MainFrame:Select("NOW"); return
         end
+        -- «char» осталась от раздела «Персонаж», которого больше нет: команда
+        -- открывает окно на «Советах», а не отвечает справкой.
         if msg == "char" or msg == "персонаж" then
-            ns.MainFrame:Show(); ns.MainFrame:Select("CHAR"); return
+            ns.MainFrame:Show(); ns.MainFrame:Select("NOW"); return
         end
-        if msg == "craft" or msg == "крафт" then
+        if msg == "craft" or msg == "крафт" or msg == "buy" or msg == "покупки" then
             ns.MainFrame:Show(); ns.MainFrame:Select("CRAFT"); return
         end
         if msg == "config" or msg == "настройки" then
@@ -569,7 +571,7 @@ function Main:RegisterSlash()
             end
         end
 
-        Api:Print("команды: /fp • now • char • craft • config • scan • reset • api"
+        Api:Print("команды: /fp • now • buy (покупки) • config • scan • reset • api"
             .. " • panel (убрать/вернуть панель шага)"
             .. " • undo (вернуть последнее скрытое) • show (вернуть все)"
             .. " • hidden • diag • diag full • diag reset"

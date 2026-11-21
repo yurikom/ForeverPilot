@@ -550,7 +550,7 @@ end
 -- списком в Tests/test_sense.lua: команда, названная в справке и не названная
 -- здесь, роняет тест.
 C.COMMANDS = {
-    "now", "char", "craft", "config", "scan",
+    "now", "char", "craft", "buy", "config", "scan",
     "panel", "panel", "panel off", "panel on",
     "hidden", "undo", "show", "reset", "api",
     "diag", "diag full", "diag reset",
@@ -687,21 +687,27 @@ local function measureNow(C2, env, S, state, into)
     local tab = ns.TabNow
     if not (tab and tab.frame) then return end
 
-    -- 1. Строка над списком.
-    local strip = tab.strip
-    if strip then
-        local text = (strip.text and S.plain(strip.text:GetText() or "")) or ""
+    -- 1. Строка в шапке списка: «N советов · ещё M не показано». Отдельной
+    --    строки над списком больше нет; что не показано, сказано здесь числом,
+    --    а причины стоят под курсором (tab.summaryTip).
+    local summary = tab.summary
+    if summary then
+        local text = S.plain(summary:GetText() or "")
         local details = {}
-        for _, d in ipairs((strip.__shown and strip.details) or {}) do
-            details[#details + 1] = S.plain(d)
-        end
+        for _, d in ipairs(tab.summaryTip or {}) do details[#details + 1] = S.plain(d) end
+        local total = #(ns.ActionEngine.cards or {})
+        local hostW = ns.MainFrame:HostNow()
+        local hiddenShown = tab.hiddenButton and tab.hiddenButton.__shown
         into.strips[#into.strips + 1] = {
             state = state.name,
-            shown = strip.__shown and true or false,
+            -- «Сказано» - строка называет не показанное.
+            shown = text:find("не показано", 1, true) ~= nil,
+            -- Сколько советов убрали правила (порог, профиль, длина списка).
+            hidden = tab:HiddenByRules(ns.ActionEngine.meta, total),
             text = text,
             lines = (text == "") and 0 or (select(2, text:gsub("\n", "")) + 1),
             width = S.textWidth(text),
-            room = tonumber(strip.__width) or 0,
+            room = math.max(100, tab.Columns(hostW).main - 48 - (hiddenShown and 150 or 0)),
             details = details,
         }
     end
@@ -739,8 +745,10 @@ local function measureNow(C2, env, S, state, into)
                 state = state.name, card = card,
                 width = tonumber(row.__width) or 0,
                 lines = {
+                    -- В строке заголовок стоит без слова, уже сказанного
+                    -- заголовком раздела (Card.ListTitle).
                     { name = "заголовок", drawn = S.plain(row.title:GetText() or ""),
-                      full = S.plain(tostring(card.title or "")), room = room.title,
+                      full = S.plain(ns.Card.ListTitle(card)), room = room.title,
                       cut = (row.cut or {}).title },
                     { name = "выгода", drawn = S.plain(row.benefit:GetText() or ""),
                       full = S.plain(tostring(card.benefit or "")), room = room.benefit,
@@ -774,27 +782,7 @@ local function measureDetail(C2, env, S, state, into, add)
         local labels, texts = S.harvest(env.world, detail.frame)
         for _, l in ipairs(labels) do add(l, "label", where, card) end
         for _, t in ipairs(texts) do add(t, "screen", where, card) end
-        local parts = {}
-        local function part(name, el, full)
-            if not (el and el.__shown) then return end
-            parts[#parts + 1] = {
-                name = name, rect = S.rectOf(el, detail.frame),
-                drawn = (el.__type == "FontString") and S.plain(el.__text or "") or nil,
-                full = full and S.plain(tostring(full)) or nil,
-            }
-        end
-        part("вид совета", detail.kind)
-        part("иконка", detail.iconHit)
-        part("название", detail.title, card.title)
-        part("выгода", detail.benefit, card.benefit)
-        part("достоверность", detail.badge)
-        part("почему", detail.why, card.why)
-        part("чего не хватает", detail.need, card.need)
-        part("подробности", detail.facts)
-        part("что сделать самому", detail.note)
-        part("место в списке", detail.place)
-        part("кнопка действия", detail.action)
-        part("кнопка пути", detail.route)
+        local parts = S.detailParts(ns)
         into.details[#into.details + 1] = {
             state = state.name, card = card, parts = parts, picked = detail.card == card,
             width = tonumber(detail.frame.__width) or 0,
