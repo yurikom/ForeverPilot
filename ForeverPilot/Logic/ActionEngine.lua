@@ -867,7 +867,22 @@ function Engine:AddEnchantCards(snap, scales)
     -- это вопрос «а нельзя ли лучше», и на него у нас нет полного ответа.
     local queue = {}
     for _, s in ipairs(advice.bare) do queue[#queue + 1] = s end
-    for _, s in ipairs(advice.replace) do queue[#queue + 1] = s end
+    -- ЗАНЯТЫЕ СЛОТЫ В КАРТОЧКИ НЕ ИДУТ.
+    --
+    -- Живая жалоба (маг 31 ур., 2026-11-21): «Чары: Чары для двуручного
+    -- оружия: малый интеллект» на посох, где у игрока уже стоит «Откровение» -
+    -- чары заведомо сильнее. Карточка честно писала «лучше или хуже я не
+    -- утверждаю», но стояла в списке СОВЕТОВ, с ценой реагентов и кнопкой, и
+    -- читалась как совет перекрыть. От уже наложенных чар игра отдаёт только
+    -- номер, сравнить мне нечем - значит и советовать нечего.
+    --
+    -- Сведения не теряются: какие слоты зачарованы, говорит сводная карточка
+    -- ниже («Уже зачарованы: …»), и туда же дописано, что перекрывать их я не
+    -- советую. EnchantAdvisor:Replacements по-прежнему отдаёт этот список.
+    local replaceSkipped = #(advice.replace or {})
+    if replaceSkipped > 0 and ns.Diag then
+        ns.Diag:Count("enchant.replaceNotAdvised", replaceSkipped)
+    end
     for _, s in ipairs(queue) do
         if added >= ns.MAX_CARDS_PER_KIND then break end
         added = added + 1
@@ -984,15 +999,31 @@ function Engine:AddEnchantCards(snap, scales)
     local worn = ns.EnchantAdvisor:Worn(snap)
     local wornText
     if #worn > 0 then
-        local parts = {}
+        local parts, numbered = {}, 0
         for _, w in ipairs(worn) do
-            parts[#parts + 1] = w.label .. " (" .. w.itemName
-                .. ", чары #" .. tostring(w.enchantID) .. ")"
+            -- Слова чар - если игра их отдала (Api:InventoryEnchantText);
+            -- иначе номер, как раньше.
+            if w.enchantText then
+                parts[#parts + 1] = w.label .. " (" .. w.itemName
+                    .. ", чары «" .. w.enchantText .. "»)"
+            else
+                numbered = numbered + 1
+                parts[#parts + 1] = w.label .. " (" .. w.itemName
+                    .. ", чары #" .. tostring(w.enchantID) .. ")"
+            end
         end
-        wornText = "Уже зачарованы: " .. table.concat(parts, ", ")
-            .. ". Номер - это всё, что игра отдаёт от наложенной чары;"
-            .. " что именно она даёт, по номеру я сказать не могу"
-            .. " и выдумывать не буду."
+        wornText = "Уже зачарованы: " .. table.concat(parts, ", ") .. "."
+        if numbered > 0 then
+            wornText = wornText .. " Номер - это всё, что игра отдаёт от наложенной чары;"
+                .. " что именно она даёт, по номеру я сказать не могу"
+                .. " и выдумывать не буду."
+        end
+        -- Формулы на часть этих слотов у игрока есть, но перекрывать то, что
+        -- стоит, я не советую: сравнить не с чем (см. replaceSkipped выше).
+        if replaceSkipped > 0 then
+            wornText = wornText .. " Перекрывать их своими формулами не советую:"
+                .. " сравнить с тем, что уже наложено, мне нечем."
+        end
     end
     -- СЛОТ, ПРО КОТОРЫЙ СОВЕТА НЕТ, ОБЯЗАН БЫТЬ НАЗВАН НА ЭКРАНЕ, А НЕ ТОЛЬКО В
     -- ДИАГНОСТИКЕ. На настоящем маге это плащ и перчатки: формул на них он
@@ -1134,6 +1165,17 @@ function Engine:AddEnchantCards(snap, scales)
                 .. ((occupiedNothing > 0) and ("; на занятые слоты формулы есть,"
                     .. " но того, что вы цените, среди них нет") or "")
         end
+    end
+    -- ЗАНЯТЫЕ СЛОТЫ С ПОЛЕЗНОЙ ФОРМУЛОЙ: КАРТОЧКИ НЕТ, НО И ТИШИНЫ НЕТ.
+    -- Совет перекрыть наложенное я не даю (см. replaceSkipped в начале
+    -- ветки), и это сказано там, где игрок читает, почему ветка промолчала.
+    if replaceSkipped > 0 and self.branchNote.enchant then
+        self.branchNote.enchant = self.branchNote.enchant
+            .. "; на " .. replaceSkipped .. " "
+            .. U.plural(replaceSkipped, "зачарованный слот", "зачарованных слота",
+                "зачарованных слотов")
+            .. " у вас есть формулы, но перекрывать наложенное я не советую —"
+            .. " сравнить с ним мне нечем"
     end
     return produced
 end
@@ -2157,8 +2199,38 @@ function Engine:AddArbitrageCards(snap, scales)
     local opps = ns.VendorArbitrage:Opportunities()
     local added = 0
 
+    -- НАЦЕНКУ, КОТОРОЙ Я САМ НЕ ВЕРЮ, В СПИСОК НЕ СТАВЛЮ.
+    --
+    -- Раньше такая карточка оставалась на экране с пометкой «сомнительно» и
+    -- уезжала вниз. В живом списке игрока (2026-11-21) это были пять карточек:
+    -- «Купить и перепродать: Черный лотос» - 40с у торговца против 10з на
+    -- аукционе, в 26 раз, - и ещё четыре того же торговца. Вердикт по ним уже
+    -- был «ошибка в данных», а совет при этом стоял в списке. Совет, которому
+    -- не верит сам советчик, - не совет: игрок действует сразу. Находки не
+    -- пропадают молча: они в meta.arbitrageImpossible, самопроверка пишет их
+    -- в файл (Logic/SanityChecks.lua), а пустая ветка называет причину.
+    local impossible = {}
+    for _, opp in ipairs(opps) do
+        local v = opp.markupVerdict
+        if v and v.code == "markup-impossible" then
+            impossible[#impossible + 1] = {
+                key = "arb:" .. tostring(opp.itemID),
+                title = "Купить и перепродать: " .. tostring(opp.name),
+                name = opp.name, itemID = opp.itemID,
+                markupVerdict = v, arbitrage = opp,
+            }
+        end
+    end
+    self.meta.arbitrageImpossible = impossible
+    if #impossible > 0 and ns.Diag then
+        ns.Diag:Count("arbitrage.impossibleNotShown", #impossible)
+    end
+
     for _, opp in ipairs(opps) do
         if added >= ns.MAX_CARDS_PER_KIND then break end
+        local believable = not (opp.markupVerdict
+            and opp.markupVerdict.code == "markup-impossible")
+        if believable then
         added = added + 1
 
         local axes = blankAxes()
@@ -2220,6 +2292,11 @@ function Engine:AddArbitrageCards(snap, scales)
             -- читал. Risk:RenderDoubts ставит ту же мысль первой фразой.
             suspect = { code = "arbitrage-markup-impossible", text = verdict.text,
                         ratio = verdict.markup }
+            -- И ВНИЗ СПИСКА. Прибыль, которой я сам не верю, не должна тянуть
+            -- карточку наверх: ось прибыли у такой карточки срезается, иначе
+            -- «+10з за штуку» с пометкой «сомнительно» всё равно стоит выше
+            -- настоящих советов.
+            axes.profit = axes.profit * 0.25
         end
 
         -- ОБЛИК. Схема та же, что у перекупки лота: купить и продать снова, то
@@ -2256,9 +2333,16 @@ function Engine:AddArbitrageCards(snap, scales)
             arbitrage = opp,
             matPrice = { unit = opp.ask, src = opp.askSrc, conf = opp.askConf },
         }, looks))
+        end -- believable
     end
 
-    if added == 0 then
+    if added == 0 and #impossible > 0 then
+        self.branchNote.arbitrage = "перепродажу не советую: " .. #impossible .. " "
+            .. U.plural(#impossible, "находка", "находки", "находок")
+            .. " с наценкой, которой не бывает (например, "
+            .. tostring(impossible[1].name) .. ") — это ошибка в данных о цене"
+            .. " торговца, а не заработок"
+    elseif added == 0 then
         local skipped = ns.VendorArbitrage.lastCurrencySkipped or 0
         self.branchNote.arbitrage = (skipped > 0)
             and ("ни одной перепродажи: у " .. skipped .. " "
@@ -2587,6 +2671,13 @@ function Engine:AddFavorCards(snap, scales)
     -- сумке. Такие позиции не выбрасываются молча - они пересчитываются в
     -- сводную карточку, где сказано, сколько Favor экономится.
     local ready, have, haveFavor = {}, {}, 0
+    -- НЕ ЛУЧШЕ ТОГО, ЧТО УЖЕ НАДЕТО - ТОЖЕ НЕ ПОКУПКА.
+    --
+    -- Живая жалоба: «За Благосклонность: Жемчужные сапоги, +15 баллов» при
+    -- надетых сапогах лучше; «Сфера мистического прозрения» в левую руку при
+    -- двуручном посохе. Такие позиции не выбрасываются молча - они
+    -- перечисляются в сводной карточке с причиной (см. Favor:Describe).
+    local worse, worseFavor = {}, 0
     -- Сколько позиций мы не смогли СОПОСТАВИТЬ с профессией игрока. Это не то
     -- же самое, что «навыка не хватает», и в живой игре было именно это: клиент
     -- назвал портняжке номер линии 2948 вместо 197, навык не нашёлся, и ветка
@@ -2598,13 +2689,47 @@ function Engine:AddFavorCards(snap, scales)
             if d.alreadyHave then
                 have[#have + 1] = d
                 haveFavor = haveFavor + (d.favor or 0)
+            elseif d.notUpgrade then
+                worse[#worse + 1] = d
+                worseFavor = worseFavor + (d.favor or 0)
             else
                 ready[#ready + 1] = d
             end
         end
     end
+    local function worseText()
+        local names = {}
+        for i = 1, math.min(3, #worse) do
+            local d = worse[i]
+            local reason
+            if d.blockedByTwoHand then
+                reason = "в левую руку, а у вас двуручное"
+                    .. (d.againstName and (" — " .. d.againstName) or "")
+            elseif d.againstName then
+                reason = "не лучше, чем " .. d.againstName
+            else
+                reason = "не лучше надетого"
+            end
+            names[#names + 1] = tostring(d.name) .. " (" .. reason .. ")"
+        end
+        return #worse .. " "
+            .. U.plural(#worse, "позицию", "позиции", "позиций")
+            .. " не советую — "
+            .. table.concat(names, ", ")
+            .. ((#worse > 3) and (" и ещё " .. (#worse - 3)) or "")
+            .. ": это " .. worseFavor .. " Favor, которые тратить незачем"
+    end
     if #ready == 0 then
-        if #have > 0 then
+        if #worse > 0 then
+            -- Всё, что осталось купить, хуже надетого: это ответ, а не тишина.
+            self.branchNote.favor =
+                "покупать за Благосклонность сейчас нечего: " .. worseText()
+                .. ((#have > 0)
+                    and (". Остальное доступное по навыку у вас уже есть ("
+                         .. #have .. " "
+                         .. U.plural(#have, "позиция", "позиции", "позиций") .. ")")
+                    or "")
+        elseif #have > 0 then
             self.branchNote.favor =
                 "всё, что доступно по навыку за Благосклонность, у вас уже есть"
                 .. " (" .. #have .. " "
@@ -2673,6 +2798,9 @@ function Engine:AddFavorCards(snap, scales)
             .. table.concat(names, ", ")
             .. ((#have > 3) and (" и ещё " .. (#have - 3)) or "")
             .. ": это " .. haveFavor .. " Favor, которые можно не тратить."
+    end
+    if #worse > 0 then
+        why1 = why1 .. " Ещё " .. worseText() .. "."
     end
     if readyCrates > 0 then
         why1 = why1 .. " Прямо сейчас у вас есть материал на " .. readyCrates .. " "
@@ -2772,7 +2900,15 @@ function Engine:AddFavorCards(snap, scales)
             local axes = blankAxes()
             -- Польза есть, но получить её нельзя за золото - только за время.
             -- Поэтому spend остаётся нулём, а power несёт настоящую оценку.
-            if d.score then axes.power = U.soft(d.score, scales.power) end
+            -- ОЦЕНИВАЕТСЯ ПРИРОСТ, а не вся вещь: d.score - это оценка
+            -- предмета против пустого слота, и именно она давала «+15» у
+            -- сапог хуже надетых. Нет прироста (сравнить было нечем) - нет и
+            -- числа: ось остаётся на уровне «польза есть, размер неизвестен».
+            if d.gain then
+                axes.power = U.soft(d.gain, scales.power)
+            elseif d.score then
+                axes.power = 0.15
+            end
             axes.ready = d.wearableNow and 0.6 or 0.2
 
             local why = "Порог — навык " .. tostring(d.skillNeeded)
@@ -2799,6 +2935,19 @@ function Engine:AddFavorCards(snap, scales)
                 why = why .. " Что даёт: " .. d.statText .. "."
             end
             if d.slotLabel then why = why .. " Слот «" .. d.slotLabel .. "»." end
+            -- С ЧЕМ СРАВНЕНО - СКАЗАНО ПРЯМО. Число справа на карточке - это
+            -- прирост против названной вещи, а не оценка самой покупки.
+            if d.gain then
+                if d.againstName then
+                    why = why .. " Это лучше, чем " .. d.againstName .. ", на "
+                        .. U.benefit(d.gain) .. "."
+                else
+                    why = why .. " Слот сейчас пуст — прирост " .. U.benefit(d.gain) .. "."
+                end
+            else
+                why = why .. " Сравнить с тем, что на вас надето, я не смог —"
+                    .. " прирост не называю."
+            end
 
             local matNames = {}
             for _, r in ipairs(d.reagents) do
@@ -2813,9 +2962,9 @@ function Engine:AddFavorCards(snap, scales)
                 icon = ns.KIND_ICON.FAVOR,
                 title = "За Благосклонность: " .. d.name,
                 benefit = tostring(d.favor) .. " Favor"
-                    .. (d.score and (", " .. U.benefitDelta(d.score)) or ""),
+                    .. (d.gain and (", " .. U.benefitDelta(d.gain)) or ""),
                 benefitKind = "power",
-                benefitValue = d.score,
+                benefitValue = d.gain,
                 why = why,
                 need = (#matNames > 0)
                     and ("Сделать потом из: " .. table.concat(matNames, ", ") .. ".")
@@ -2867,6 +3016,35 @@ function Engine:AddCampCards(snap, scales)
             and "данных про лагерь у меня нет"
             or "про лагерь сказать нечего"
         return 0
+    end
+
+    -- ОБЩИЙ БАФФ ЛАГЕРЯ УЖЕ НА ИГРОКЕ - СТАВИТЬ ЛАГЕРЬ ЗАНОВО НЕЗАЧЕМ.
+    --
+    -- Увидено в игре (2026-11-21): игрок поставил аквариум, на нём висит бафф
+    -- «Бонусы лагеря», а первой карточкой списка по-прежнему стояло «Поставить
+    -- у костра: Аквариум». Бафф лагеря один на всё и держится час
+    -- (Data/Camp.lua, CAMP_BUFF_SPELLS), свой предмет у костра у игрока один, и
+    -- после установки он час на откате - то есть пока бафф висит, сделать с
+    -- лагерем нечего. Карточки возвращаются, когда бафф кончается.
+    local campBuff = Camp.BuffState and Camp:BuffState(snap) or nil
+    local campBuffEnds = nil
+    if campBuff then
+        local left = campBuff.remaining
+        -- Порог - в Core/Const.lua; запасное значение - те же пять минут.
+        if left == nil or left > (ns.CAMP_BUFF_REFRESH_SECONDS or 5 * 60) then
+            local text = "бонусы лагеря уже на вас"
+            if left then
+                local minutes = math.ceil(left / 60)
+                text = text .. ", ещё " .. minutes .. " "
+                    .. U.plural(minutes, "минуту", "минуты", "минут")
+            end
+            self.branchNote.camp = text .. " — ставить лагерь заново пока незачем"
+            if ns.Diag then ns.Diag:Count("camp.buffActive") end
+            return 0
+        end
+        local minutes = math.max(1, math.ceil(left / 60))
+        campBuffEnds = "Бонусы лагеря кончаются через " .. minutes .. " "
+            .. U.plural(minutes, "минуту", "минуты", "минут") .. "."
     end
 
     local added = 0
@@ -2944,13 +3122,34 @@ function Engine:AddCampCards(snap, scales)
         return "Мест у костра станет " .. want .. " вместо " .. have .. "."
     end
 
+    -- БАФФ ЛАГЕРЯ УЖЕ НА ИГРОКЕ - ЗНАЧИТ, ОБЪЕКТ РАБОТАЕТ, И СТАВИТЬ ЕГО НЕЗАЧЕМ.
+    -- Слова игрока: «он должен учитывать то, что у меня поставлено от костра, и
+    -- баффы, которые на мне». Спросить у игры, что стоит, нечем; баффы - можно.
+    local activeEffects = Camp.ActiveEffects and Camp:ActiveEffects(snap) or {}
+    local activeNames = {}
+    local hereList = {}
+    for _, d in ipairs(plan.here) do
+        if activeEffects[d.item] then
+            activeNames[#activeNames + 1] = d.name
+        else
+            hereList[#hereList + 1] = d
+        end
+    end
+    local activeText = nil
+    if #activeNames > 0 then
+        activeText = "Уже действует на вас: " .. table.concat(activeNames, ", ")
+            .. " — этот бафф лагеря я вижу, заново ставить не советую."
+        if ns.Diag then ns.Diag:Count("camp.effectAlreadyActive", #activeNames) end
+    end
+
     local first = true
     -- «7 из 12» - один раз, на первой карточке ветки: второй раз та же фраза не
     -- сообщает ничего.
     local function withCover(text)
-        if first and coverText then
+        if first then
             first = false
-            return Engine.JoinSentences(text, coverText)
+            if activeText then text = Engine.JoinSentences(text, activeText) end
+            if coverText then text = Engine.JoinSentences(text, coverText) end
         end
         return text
     end
@@ -2996,9 +3195,56 @@ function Engine:AddCampCards(snap, scales)
 
     local shown = {}
 
+    -- ГОТОВЫЙ ПРЕДМЕТ УЖЕ В СУМКАХ - ЗНАЧИТ «ПОСТАВЬ», А НЕ «СДЕЛАЙ».
+    --
+    -- Живая жалоба (маг 31 ур., 2026-11-21): первой карточкой списка стояло
+    -- «Сделать для лагеря: Аквариум» с ценой материалов - при 32 аквариумах в
+    -- сумках. Рядом «Сделать костёр для лагеря» при шести наборах для костра.
+    -- Ветка смотрела в сумки за РЕАГЕНТАМИ и не смотрела за самим предметом.
+    -- Что уже стоит у костра, игра по-прежнему не говорит - но что лежит в
+    -- сумках, видно точно, и делать второй раз то, что лежит, незачем.
+    -- Возвращает true, если карточка «поставить» сделана.
+    -- Откат предмета лагеря. Установка одного предмета отправляет все свои на
+    -- общий откат в час: пока он идёт, совет «поставь» невыполним, и вместо
+    -- карточки остаётся строка с тем, сколько ждать.
+    local onCooldown = {}
+    local function placeInstead(d, isFire)
+        local have = (snap and snap.bags and tonumber(snap.bags[d.item])) or 0
+        if have <= 0 then return false end
+        local wait = Api.ItemCooldownRemaining and Api:ItemCooldownRemaining(d.item) or nil
+        if wait and wait > 60 then
+            local minutes = math.ceil(wait / 60)
+            onCooldown[#onCooldown + 1] = d.name .. " — ещё " .. minutes .. " "
+                .. U.plural(minutes, "минуту", "минуты", "минут")
+            if ns.Diag then ns.Diag:Count("camp.itemOnCooldown") end
+            return true
+        end
+        local body = "В сумках уже лежит " .. have .. " "
+            .. U.plural(have, "штука", "штуки", "штук")
+            .. " — делать и покупать не нужно."
+        if isFire then
+            body = body .. " Без костра предметы лагеря не ставятся."
+        else
+            -- Как получить сам бафф - правила из гайдов (Data/Camp.lua).
+            body = Engine.JoinSentences(body,
+                "Потом посидите у костра минуту — бонусы лагеря придут на час.")
+            body = Engine.JoinSentences(body, campBuffEnds)
+        end
+        campCard(d, "camp:place:" .. d.item,
+            (isFire and "Разжечь костёр: " or "Поставить у костра: ") .. d.name,
+            body,
+            (isFire and "Поставить и разжечь — делаете вы. "
+                or "Поставить у костра — ставите вы. ") .. Camp:LimitShort(),
+            { kind = "showItem", label = "Показать предмет", itemID = d.item },
+            nil, 1.0)
+        return true
+    end
+
     -- 1. Лучшее, что он может сделать сам прямо сейчас.
-    local best = plan.here[1]
-    if best then
+    local best = hereList[1]
+    if best and placeInstead(best, false) then
+        shown[best.item] = true
+    elseif best then
         shown[best.item] = true
         campCard(best, "camp:make:" .. best.item,
             "Сделать для лагеря: " .. best.name,
@@ -3018,8 +3264,14 @@ function Engine:AddCampCards(snap, scales)
     --    игрока - узнать нечем (функций про лагерь в клиенте нет). Поэтому он
     --    не вытесняет лучший совет, но и не уходит из списка за то, что его
     --    бонус скромнее.
+    -- СВОЙ ПРЕДМЕТ НА ОТКАТЕ - КОСТЁР РАЗЖИГАТЬ НЕЗАЧЕМ. Увидено в игре
+    -- (2026-11-21): аквариум на перезарядке, карточки про него нет, а «Разжечь
+    -- костёр» осталась одна - совет зажечь костёр, к которому нечего поставить.
     local fire = plan.fireNow
-    if fire and added < 4 and not shown[fire.item] then
+    if #onCooldown > 0 then fire = nil end
+    if fire and added < 4 and not shown[fire.item] and placeInstead(fire, true) then
+        shown[fire.item] = true
+    elseif fire and added < 4 and not shown[fire.item] then
         shown[fire.item] = true
         campCard(fire, "camp:fire:" .. fire.item,
             "Сделать костёр для лагеря: " .. fire.name,
@@ -3086,57 +3338,15 @@ function Engine:AddCampCards(snap, scales)
         })
     end
 
-    -- 4. ЧТО СДЕЛАЕТ ДРУГОЙ ПЕРСОНАЖ. У игрока две профессии лагеря лежат на
-    --    втором персонаже, и сам он об этом не думает: в сумки и в окно
-    --    профессий он смотрит на том, кем играет.
-    local other = plan.elsewhere[1]
-    if other and added < 4 then
-        local who = Camp:HolderLabel(other.holder)
-        local text = "Порог — навык " .. tostring(other.need)
-        if other.profLabel then
-            text = text .. " по «" .. other.profLabel .. "»"
-        end
-        if other.skill then
-            text = text .. ", у вас " .. other.skill .. ", а у " .. who .. " хватает."
-        else
-            text = text .. "; у этого персонажа такой профессии нет, а у "
-                .. who .. " она есть."
-        end
-        -- ЧЕГО ПРО НЕГО НЕ ВИДНО - СКАЗАНО. Книга рецептов есть только у того
-        -- персонажа, кем играют: выучен ли у второго этот рецепт, мне не видно,
-        -- и делать вид, что видно, нельзя.
-        text = Engine.JoinSentences(text,
-            "Выучен ли у него этот рецепт, мне не видно: книга рецептов другого"
-            .. " персонажа мне не отдаётся.")
-        text = Engine.JoinSentences(text, readyText(other))
-        added = added + 1
-        local axes = blankAxes()
-        axes.power = other.power
-        axes.ready = 0.15
-        self:Add({
-            key = "camp:other:" .. tostring(other.item),
-            kind = ns.KIND.CAMP,
-            icon = ns.KIND_ICON.CAMP,
-            -- Заголовок короткий НАРОЧНО: в нём полное имя персонажа, а у
-            -- игрока два «Гендольфа», и без фамилии совет бессмыслен. Поэтому
-            -- слова «для лагеря» сжаты до «Лагерь:» - место в строке уходит на
-            -- то, что игроку нужно различать.
-            title = "Лагерь: " .. other.name .. " сделает "
-                .. tostring(other.holder.fullName),
-            benefit = benefitOf(other),
-            benefitKind = "power",
-            why = withCover(text),
-            need = "Сделать тем персонажем и переслать почтой. Я почтой не"
-                .. " управляю и персонажей не переключаю.",
-            action = { kind = "showItem", label = "Показать предмет",
-                       itemID = other.item },
-            itemID = other.item,
-            conf = other.conf,
-            axes = axes,
-            tipNote = tipNote,
-            sourceNote = sourceNote,
-            camp = other,
-        })
+    -- 4. ДРУГОЙ ПЕРСОНАЖ.
+    -- ПРЕДМЕТ ЧУЖОЙ ПРОФЕССИИ ПОСТАВИТЬ НЕЛЬЗЯ - И СОВЕТОВАТЬ ЕГО ПЕРЕСЫЛАТЬ ТОЖЕ.
+    -- Раньше здесь была карточка «это сделает другой персонаж и перешлёт
+    -- почтой». По правилам лагеря предмет ставит тот, у кого есть его профессия
+    -- (Data/Camp.lua): алхимический колодец магу без алхимии не поставить,
+    -- сколько его ни пересылай. Совет был невыполним, поэтому его больше нет;
+    -- что такие предметы на аккаунте есть, видно в плане и в диагностике.
+    if plan.elsewhere[1] and ns.Diag then
+        ns.Diag:Count("camp.otherProfessionNotAdvised", #plan.elsewhere)
     end
 
     -- 5. РЕЦЕПТ У ТРЕНЕРА. Первый тир рецепта с чертежа не имеет: его даёт
@@ -3159,27 +3369,20 @@ function Engine:AddCampCards(snap, scales)
             nil, 0.3)
     end
 
-    -- 6. Второй по пользе свой предмет - если после всего осталось место.
-    for _, d in ipairs(plan.here) do
-        if added >= 4 then break end
-        if not shown[d.item] then
-            shown[d.item] = true
-            campCard(d, "camp:make:" .. d.item,
-                "Сделать для лагеря: " .. d.name,
-                Engine.JoinSentences(
-                    Engine.JoinSentences(
-                        Engine.JoinSentences(thresholdText(d), "Рецепт у вас выучен."),
-                        costText(d)),
-                    readyText(d)),
-                "Поставить у костра — ставите вы. " .. Camp:LimitShort(),
-                makeAction(d),
-                (not d.haveAll) and d.costKnown and d.cost or nil)
-        end
-    end
+    -- ВТОРОГО СВОЕГО ПРЕДМЕТА ЗДЕСЬ НЕТ, И ЭТО НАМЕРЕННО. У костра игрок ставит
+    -- один свой предмет, и после установки все его предметы лагеря час на
+    -- откате (Data/Camp.lua). Совет «сделай ещё и второй» вёл к вещи, которую
+    -- поставить будет нельзя.
 
     if added == 0 then
         -- ПРИЧИНА РАЗНАЯ, И ЭТО РАЗНЫЕ ОТВЕТЫ.
-        if plan.unread > 0 then
+        if #onCooldown > 0 then
+            self.branchNote.camp = "предметы лагеря на перезарядке: "
+                .. table.concat(onCooldown, "; ")
+        elseif activeText then
+            self.branchNote.camp = "всё, что вы можете поставить сами, уже"
+                .. " действует на вас: " .. table.concat(activeNames, ", ")
+        elseif plan.unread > 0 then
             self.branchNote.camp = "выучены ли рецепты лагеря, я не знаю: окно"
                 .. " этих профессий в этой сессии не открывали, и список"
                 .. " рецептов игра мне не отдала"
@@ -4387,6 +4590,29 @@ function Engine:ReportToDiag(snap, counts, generated, scales, built)
             and "ни один слот не прочитан" or nil,
         reasonCode = (U.count(snap.equipped) == 0) and "API_SILENT" or nil,
     })
+
+    -- БАФФЫ. Список имён пишется в файл целиком (их не больше сорока): по нему
+    -- видно, что именно игра отдаёт, и какие баффы даёт лагерь - без этого
+    -- научить ветку лагеря говорить «уже действует» нечем.
+    do
+        local names = {}
+        for i, a in ipairs(snap.auras or {}) do
+            if i > 40 then break end
+            names[#names + 1] = tostring(a.name) .. "#" .. tostring(a.spellID)
+        end
+        local reason, code = nil, nil
+        if snap.auraSource == nil then
+            reason, code = "прочитать баффы нечем: ни C_UnitAuras, ни UnitBuff", "NO_API"
+        elseif #names == 0 then
+            reason, code = "баффов на игроке сейчас нет", "EMPTY"
+        end
+        Diag:Module("auras", {
+            ["in"] = 1, out = #names,
+            source = snap.auraSource,
+            names = names,
+            reason = reason, reasonCode = code,
+        })
+    end
 
     Diag:Module("recipeBook", {
         ["in"] = #profs, out = recipeLearned,

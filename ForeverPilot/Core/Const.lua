@@ -3,7 +3,7 @@
 local ADDON, ns = ...
 
 ns.ADDON_NAME = ADDON or "ForeverPilot"
-ns.VERSION = "0.1.0"
+ns.VERSION = "0.3.0"
 
 -- Money ------------------------------------------------------------------
 ns.COPPER_PER_SILVER = 100
@@ -489,6 +489,18 @@ ns.DIFF_SKILL_CHANCE = {
 -- Throttling. The engine never recomputes more often than this.
 ns.RECOMPUTE_MIN_INTERVAL = 1.5   -- seconds between full recomputes
 ns.RECOMPUTE_DEBOUNCE     = 0.4   -- seconds to wait after the last event
+-- ПОКА НИКТО НЕ СМОТРИТ - НЕ СЧИТАЕМ. Полный пересчёт - это десятки миллисекунд
+-- одним куском (в живом файле игрока: в среднем 84 мс, пик 143 мс), то есть
+-- рывок кадра. При закрытом окне и выключенной панели он не нужен никому, и
+-- делается не чаще, чем раз в столько секунд - чтобы суточный слепок цен и
+-- уведомления не протухали совсем. См. MainFrame:ShouldDefer.
+-- Окно на экране: по мелочам (сумки, деньги, подгрузка имён, цены) считаем не
+-- чаще раза в столько секунд. Важная причина и жест игрока этого не ждут.
+ns.VISIBLE_SOFT_SECONDS = 5
+ns.HIDDEN_REBUILD_SECONDS = 900
+-- Как часто отложенный пересчёт проверяет, не пора ли (секунды). Сама проверка
+-- - два сравнения, пересчёта в ней нет.
+ns.DEFERRED_RETRY_SECONDS = 1.0
 ns.PRICE_STALE_SECONDS    = 48 * 3600
 -- ДВА РАЗНЫХ ВОПРОСА, И ПУТАНИЦА МЕЖДУ НИМИ СТОИЛА ВРАНЬЯ НА ЭКРАНЕ.
 --   PRICE_STALE_SECONDS - когда цене перестаёт быть веры (достоверность падает
@@ -520,8 +532,18 @@ ns.AUCTION_RESCAN_GUARD   = 60
 ns.PRICE_FRESH_SECONDS    = 6 * 3600
 
 -- How many cards the Now tab builds / shows.
+-- 40 И 5. Предел на ветку (5 вместо 8) - вот что убирает воду: восемь
+-- перепродаж подряд топили список. Общий предел при этом оставлен 40, и это
+-- проверено на живом файле игрока (2026-11-21): советов генерируется 33, и при
+-- пределе 20 с экрана пропали сводка по чарам (в ней слова наложенных чар),
+-- пять перепродаж и пять вещей на себя - то есть обрезалось нужное, а не вода.
+-- Что обрезано, если обрезано, сказано в диагностике (list-truncated).
 ns.MAX_CARDS = 40
-ns.MAX_CARDS_PER_KIND = 8
+ns.MAX_CARDS_PER_KIND = 5
+
+-- Лагерь: бонусы ещё висят дольше этого - советовать ставить лагерь заново
+-- незачем (Engine:AddCampCards).
+ns.CAMP_BUFF_REFRESH_SECONDS = 300
 
 -- How long a hidden card stays hidden. Two durations for two places, and the
 -- same gesture in both: two right clicks. On the small panel they put the step

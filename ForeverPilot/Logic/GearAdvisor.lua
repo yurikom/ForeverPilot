@@ -905,6 +905,8 @@ function Gear:SlotItem(slotKey, snap, weights)
         if out.where == "equipped" then
             local worn = snap and snap.equipped and snap.equipped[slotKey]
             out.enchantID = worn and worn.enchantID or U.enchantIDFromLink(out.link)
+            -- Слова чар, если игра их отдала (Api:InventoryEnchantText).
+            out.enchantText = worn and worn.enchantText or nil
         elseif out.link then
             out.enchantID = U.enchantIDFromLink(out.link)
         else

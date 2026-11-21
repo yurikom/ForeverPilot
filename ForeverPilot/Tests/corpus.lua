@@ -550,7 +550,7 @@ end
 -- списком в Tests/test_sense.lua: команда, названная в справке и не названная
 -- здесь, роняет тест.
 C.COMMANDS = {
-    "now", "char", "craft", "config", "scan",
+    "now", "char", "craft", "buy", "config", "scan",
     "panel", "panel", "panel off", "panel on",
     "hidden", "undo", "show", "reset", "api",
     "diag", "diag full", "diag reset",
@@ -687,21 +687,27 @@ local function measureNow(C2, env, S, state, into)
     local tab = ns.TabNow
     if not (tab and tab.frame) then return end
 
-    -- 1. Строка над списком.
-    local strip = tab.strip
-    if strip then
-        local text = (strip.text and S.plain(strip.text:GetText() or "")) or ""
+    -- 1. Строка в шапке списка: «N советов · ещё M не показано». Отдельной
+    --    строки над списком больше нет; что не показано, сказано здесь числом,
+    --    а причины стоят под курсором (tab.summaryTip).
+    local summary = tab.summary
+    if summary then
+        local text = S.plain(summary:GetText() or "")
         local details = {}
-        for _, d in ipairs((strip.__shown and strip.details) or {}) do
-            details[#details + 1] = S.plain(d)
-        end
+        for _, d in ipairs(tab.summaryTip or {}) do details[#details + 1] = S.plain(d) end
+        local total = #(ns.ActionEngine.cards or {})
+        local hostW = ns.MainFrame:HostNow()
+        local hiddenShown = tab.hiddenButton and tab.hiddenButton.__shown
         into.strips[#into.strips + 1] = {
             state = state.name,
-            shown = strip.__shown and true or false,
+            -- «Сказано» - строка называет не показанное.
+            shown = text:find("не показано", 1, true) ~= nil,
+            -- Сколько советов убрали правила (порог, профиль, длина списка).
+            hidden = tab:HiddenByRules(ns.ActionEngine.meta, total),
             text = text,
             lines = (text == "") and 0 or (select(2, text:gsub("\n", "")) + 1),
             width = S.textWidth(text),
-            room = tonumber(strip.__width) or 0,
+            room = math.max(100, tab.Columns(hostW).main - 48 - (hiddenShown and 150 or 0)),
             details = details,
         }
     end
@@ -728,30 +734,65 @@ local function measureNow(C2, env, S, state, into)
         width = tonumber(tab.frame.__width) or 0,
     }
 
-    -- 3. Строки карточек: что нарисовано, что было целиком, сколько места.
+    -- 3. Строки списка: что нарисовано, что было целиком, сколько места.
+    --    В строке заголовок и выгода; «почему» и «чего не хватает» стоят в
+    --    карточке совета справа - целиком (см. measureDetail ниже).
     for _, row in ipairs(ns.Card.pool) do
         if row.__shown and row.card then
             local card = row.card
-            local room = ns.Card.RoomFor(row, card,
-                row.action.__shown and true or false,
-                row.route.__shown and true or false)
+            local room = ns.Card.RoomFor(row, card)
             into.rows[#into.rows + 1] = {
                 state = state.name, card = card,
                 width = tonumber(row.__width) or 0,
                 lines = {
+                    -- В строке заголовок стоит без слова, уже сказанного
+                    -- заголовком раздела (Card.ListTitle).
                     { name = "заголовок", drawn = S.plain(row.title:GetText() or ""),
-                      full = S.plain(tostring(card.title or "")), room = room.title,
+                      full = S.plain(ns.Card.ListTitle(card)), room = room.title,
                       cut = (row.cut or {}).title },
-                    { name = "почему", drawn = S.plain(row.why:GetText() or ""),
-                      full = S.plain(tostring(card.why or "")), room = room.why,
-                      cut = (row.cut or {}).why },
-                    { name = "чего не хватает", drawn = S.plain(row.need:GetText() or ""),
-                      full = S.plain(tostring(card.need or "")), room = room.need,
-                      cut = (row.cut or {}).need },
+                    { name = "выгода", drawn = S.plain(row.benefit:GetText() or ""),
+                      full = S.plain(tostring(card.benefit or "")), room = room.benefit,
+                      cut = (row.cut or {}).benefit },
                 },
             }
         end
     end
+end
+
+-- КАРТОЧКА СОВЕТА СПРАВА ОТ СПИСКА - ДЛЯ КАЖДОГО СОВЕТА НА ЭКРАНЕ.
+--
+-- Щелчок по строке открывает совет в карточке: полный текст и одна кнопка.
+-- Здесь это делается для каждой строки по очереди, и собирается всё, что в
+-- карточке при этом стоит: текст (он идёт в общее собрание, под правила
+-- смысла), прямоугольники частей (под правило «ничто ни на что не налезает») и
+-- то, что нарисовано целиком, рядом с тем, что должно было быть.
+local function measureDetail(C2, env, S, state, into, add)
+    local ns = env.ns
+    local detail = ns.Detail
+    if not (detail and detail.frame and ns.TabNow and ns.TabNow.frame) then return end
+    local rows = {}
+    for _, row in ipairs(ns.Card.pool) do
+        if row.__shown and row.card then rows[#rows + 1] = row end
+    end
+    local first = rows[1] and rows[1].card
+    for _, row in ipairs(rows) do
+        local card = row.card
+        S.pick(ns, row)
+        local where = state.name .. " / карточка совета «" .. tostring(card.title) .. "»"
+        local labels, texts = S.harvest(env.world, detail.frame)
+        for _, l in ipairs(labels) do add(l, "label", where, card) end
+        for _, t in ipairs(texts) do add(t, "screen", where, card) end
+        local parts = S.detailParts(ns)
+        into.details[#into.details + 1] = {
+            state = state.name, card = card, parts = parts, picked = detail.card == card,
+            width = tonumber(detail.frame.__width) or 0,
+            height = tonumber(detail.frame.__height) or 0,
+            labels = labels, texts = texts,
+            action = detail.action.__shown and S.plain(detail.action.text.__text or "") or nil,
+        }
+    end
+    -- Вернуть выбор туда, где он был: дальше экран читают другие сборщики.
+    if first then ns.TabNow:SelectCard(first) end
 end
 
 -- opts.states - список состояний (по умолчанию C.STATES)
@@ -766,6 +807,7 @@ function C.build(H, S, opts)
         strips = {},    -- { state, shown, text, lines, width, room, details }
         bands = {},     -- { state, width, bands = { { name, rect } } }
         rows = {},      -- { state, card, width, lines = { { name, drawn, full, room } } }
+        details = {},   -- { state, card, parts = { { name, rect, drawn, full } }, action }
         states = {},
         hovered = 0,
     }
@@ -825,7 +867,10 @@ function C.build(H, S, opts)
                 state = state.name, tab = def.key, where = where,
                 labels = labels, texts = texts, kinds = kinds,
             }
-            if def.key == "NOW" then measureNow(C, env, S, state, corpus) end
+            if def.key == "NOW" then
+                measureNow(C, env, S, state, corpus)
+                measureDetail(C, env, S, state, corpus, add)
+            end
             local tips = {}
             corpus.hovered = corpus.hovered + hoverAll(env, S, tips, where .. " / подсказка")
             for _, t in ipairs(tips) do add(t.text, t.channel, t.where) end
@@ -907,29 +952,33 @@ function C.build(H, S, opts)
         for _, row in ipairs(targets) do
             local card = row.card
             local act = card.action or {}
+            -- ЧТО НА КНОПКЕ НАПИСАНО И ЧТО ОНА ДЕЛАЕТ - СПРАШИВАЕМ ДО НАЖАТИЯ.
+            -- Подпись и действие у совета теперь зависят от того, что открыто
+            -- (аукцион, окно профессии): Card.LiveAction. Договор проверяется
+            -- по тому, что было на кнопке в момент нажатия.
+            local live = nsr.Card.LiveAction and nsr.Card.LiveAction(card) or nil
+            local liveKind = (live and live.kind) or act.kind
+            local liveLabel = (live and live.label) or act.label
+            -- ЩЕЛЧОК ПО СТРОКЕ ВЫБИРАЕТ СОВЕТ, КНОПКА - В КАРТОЧКЕ СПРАВА.
+            --
+            -- Так теперь действует игрок, так же действует и проверка: щелчок
+            -- по строке, потом кнопка карточки, если она нарисована. Если
+            -- кнопки нет (у советов про рецепт её нет вовсе: открыть окно
+            -- профессий игра аддонам запрещает), ответ игроку стоит словами в
+            -- самой карточке - и он собран выше, в measureDetail.
+            --
+            -- Выбор идёт ДО снимка мира: «что изменилось» - это про нажатие
+            -- кнопки, а не про то, какой совет открыт справа.
+            local ok, err = pcall(S.pick, nsr, row)
+            local button = ok and S.actionOf(nsr, row) or nil
+            local shown = button ~= nil
+            local handler = button and button.__scripts and button.__scripts.OnClick
             env.said = {}
             nsr.Api.lastSaid = nil            -- каждое нажатие слушаем с чистого листа
             local before = C.signature(env, S)
             local callsBefore = #(env.openRecipeCalls or {})
-            local shown = row.action and row.action.__shown
-            local handler = shown and row.action.__scripts and row.action.__scripts.OnClick
-            local ok, err = true, nil
             if handler then
-                ok, err = pcall(handler, row.action)
-            else
-                -- КНОПКИ НЕТ - НАЖИМАЕМ САМУ КАРТОЧКУ, и это не придирка.
-                --
-                -- У советов про рецепт кнопки нет вовсе: открыть окно
-                -- профессий игра аддонам запрещает. Весь ответ игроку - в
-                -- щелчке по самой карточке («откройте такую-то профессию и
-                -- найдите такой-то рецепт»), и если его сюда не собрать, этот
-                -- текст не увидит ни одно правило смысла: он нигде больше не
-                -- появляется.
-                local rowHandler = row.__scripts and row.__scripts.OnClick
-                if rowHandler then
-                    handler = rowHandler
-                    ok, err = pcall(rowHandler, row, "LeftButton")
-                end
+                ok, err = pcall(handler, button)
             end
             local said = {}
             for _, line in ipairs(env.said) do
@@ -938,7 +987,7 @@ function C.build(H, S, opts)
                     .. "» у совета «" .. tostring(card.title) .. "»", card)
             end
             corpus.presses[#corpus.presses + 1] = {
-                state = state.name, card = card, kind = act.kind, label = act.label,
+                state = state.name, card = card, kind = liveKind, label = liveLabel,
                 drawn = shown and true or false, pressed = handler ~= nil,
                 ok = ok, err = err, said = said, raw = env.said,
                 changed = C.signature(env, S) ~= before,

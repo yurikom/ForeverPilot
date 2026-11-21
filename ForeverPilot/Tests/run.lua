@@ -22,7 +22,8 @@ local suites = { "test_load",
                  "test_assistant", "test_handoff", "test_vanish",
                  "test_recipe", "test_confirm", "test_nonsense",
                  "test_void", "test_ledger", "test_anyclass",
-                 "test_ceiling", "test_appearance",
+                 "test_ceiling", "test_appearance", "test_quiet", "test_aware", "test_handy",
+                 "test_window",
                  "test_sense" }
 
 -- Arguments arrive two different ways depending on the interpreter: plain lua

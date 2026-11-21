@@ -76,6 +76,11 @@ function Api:Detect()
         -- есть - в диагностике игрока она числилась доступной, - но она
         -- защищённая: вызов из аддона игра блокирует и обвиняет аддон. Почему
         -- её нет даже в проверке наличия, написано ниже, у Items.
+        -- Поиск по имени в окне профессии: не открывает окно, а сужает список
+        -- в уже открытом (Api:SetRecipeNameFilter). Здесь - только чтобы в
+        -- файле диагностики было видно, есть ли функции на клиенте.
+        recipeNameFilter    = "C_TradeSkillUI.SetRecipeItemNameFilter",
+        recipeNameFilterGet = "C_TradeSkillUI.GetRecipeItemNameFilter",
         isTradeLinked    = "C_TradeSkillUI.IsTradeSkillLinked",
         isTradeGuild     = "C_TradeSkillUI.IsTradeSkillGuild",
         invItemLink      = "GetInventoryItemLink",
@@ -223,6 +228,18 @@ end
 function Api:InCombat()
     if Api.has.inCombat then return F.inCombat() and true or false end
     return false
+end
+
+-- ДВИЖЕТСЯ ЛИ ИГРОК. Нужно одному месту: рывок кадра на бегу виден, на месте -
+-- нет, поэтому пересчёт на бегу откладывается (MainFrame:ShouldDefer). Функции
+-- может не быть - тогда ответ «стоит», и аддон ведёт себя как раньше.
+local function movesNow(fn) return (tonumber(fn("player")) or 0) > 0 end
+function Api:PlayerMoving()
+    local fn = _G.GetUnitSpeed
+    if type(fn) ~= "function" then return false end
+    -- Сравнение - внутри защищённого вызова (см. Api:PlayerCasting).
+    local ok, moving = pcall(movesNow, fn)
+    return (ok and moving == true) or false
 end
 
 function Api:Now()
@@ -807,6 +824,52 @@ end
 -- (закрытый перечень защищённых вызовов): ИМЕНИ ЭТОЙ ФУНКЦИИ В КОДЕ АДДОНА НЕТ
 -- ВОВСЕ - ни вызова, ни проверки наличия. Аддон советник: что нажать самому,
 -- он говорит СЛОВАМИ (Logic/RecipeBook.lua, RecipeBook:FindText).
+
+-- ЧТО ВМЕСТО ЭТОГО МОЖНО: СУЗИТЬ СПИСОК В ОКНЕ, КОТОРОЕ ИГРОК ОТКРЫЛ САМ.
+--
+-- Жалоба игрока (2026-11-21): «я просто на это смотрю и должен ручками вбивать
+-- название в профессии». Открыть окно аддону нельзя, но у окна профессии есть
+-- поиск по имени, и поставить его текст - не защищённое действие: это та же
+-- функция, которую зовёт поле поиска самого окна. Она ничего не открывает, не
+-- крафтит и не выбирает; она оставляет в списке рецепты с таким именем.
+--
+-- Функция берётся у клиента в момент вызова и только через pcall. Если игра
+-- всё-таки заблокирует вызов, это увидит Events:OnActionBlocked и выключит
+-- кнопку насовсем (RecipeBook.filterBroken) - второй раз игрок окно про
+-- блокировку не увидит.
+local function tradeSkillFn(name)
+    local C = _G.C_TradeSkillUI
+    local fn = type(C) == "table" and C[name] or nil
+    return (type(fn) == "function") and fn or nil
+end
+
+function Api:CanFilterRecipes()
+    return tradeSkillFn("SetRecipeItemNameFilter") ~= nil
+end
+
+-- Текст поиска в окне профессии; nil - спросить нечем.
+function Api:RecipeNameFilter()
+    local fn = tradeSkillFn("GetRecipeItemNameFilter")
+    if not fn then return nil end
+    local ok, text = pcall(fn)
+    if ok and type(text) == "string" then return text end
+    return nil
+end
+
+-- true или false + причина словом: no-api, combat, error.
+function Api:SetRecipeNameFilter(text)
+    local fn = tradeSkillFn("SetRecipeItemNameFilter")
+    if not fn then return false, "no-api" end
+    if Api:InCombat() then return false, "combat" end
+    local ok, err = pcall(fn, text or "")
+    if ns.Diag then
+        ns.Diag:Call("C_TradeSkillUI.SetRecipeItemNameFilter", ok,
+            ok and ((text and text ~= "") and "поиск поставлен" or "поиск снят")
+                or tostring(err))
+    end
+    if not ok then return false, "error", tostring(err) end
+    return true
+end
 
 -- Items ------------------------------------------------------------------
 
@@ -1656,6 +1719,314 @@ end
 -- Equipment --------------------------------------------------------------
 
 -- slotKey -> { itemID, link, enchantID } for every slot we reason about.
+-- ОТКАТ ПРЕДМЕТА -------------------------------------------------------------
+--
+-- Сколько секунд предмет ещё на перезарядке: 0 - готов, nil - спросить нечем
+-- или ответ нечитаем. Нужен лагерю: установка одного предмета отправляет все
+-- свои предметы лагеря на общий часовой откат, и совет «поставь» в этот час
+-- невыполним. Короткий общий откат (до полутора секунд) откатом не считается.
+local function cooldownLeft(fn, itemID, now)
+    local start, duration = fn(itemID)
+    start, duration = tonumber(start) or 0, tonumber(duration) or 0
+    if start <= 0 or duration <= 1.5 then return 0 end
+    local left = start + duration - now
+    if left < 0 then left = 0 end
+    return left
+end
+-- ВИДИТ ЛИ КЛИЕНТ ФАЙЛЫ, КОТОРЫЕ ПОЯВИЛИСЬ В ПАПКЕ АДДОНА.
+--
+-- Значок, шрифт и картинки аддона - новые файлы, а новые файлы клиент находит
+-- только после полного перезапуска игры: список файлов аддона он составляет
+-- при старте, и /reload его не обновляет. Текстура из ненайденного файла
+-- рисуется зелёным квадратом, а текст ненайденным шрифтом не рисуется вовсе.
+--
+-- Спросить «есть ли файл» у клиента нечем, поэтому сторожей два:
+--
+--   1. МЕТКА В .toc («X-Media»). Она растёт с каждым набором новых файлов.
+--      Клиент отдаёт нынешнее значение - значит, .toc он читал уже после
+--      обновления. Api:MediaReady (значок аддона) верит одной метке: значок
+--      рисуется текстурой, и худшее, что с ним бывает, - запасная картинка.
+--   2. ПРОБА ШРИФТА. Свой шрифт пробуем загрузить по-настоящему, и клиент сам
+--      отвечает, годится ли файл. Api:FontsReady требует И метку, И пробу:
+--      окно, нарисованное шрифтом, которого клиент не видит, - это окно без
+--      единой буквы, и рисковать тут нечем.
+--
+-- Не прошло хотя бы одно - всё рисуется средствами игры: её шрифтами и без
+-- своих значков. Ошибиться здесь можно только в сторону простого вида.
+Api.MEDIA = "Interface\\AddOns\\" .. tostring(ADDON) .. "\\Media\\"
+Api.MEDIA_PROBE = "Fonts\\FiraSans-Regular.ttf"
+Api.MEDIA_STAMP_ICON = 1     -- с этой метки в папке лежит значок аддона
+Api.MEDIA_STAMP_FONTS = 2    -- с этой - шрифт Fira Sans и свои значки
+
+function Api:AddonMeta(field)
+    local getMeta = (_G.C_AddOns and _G.C_AddOns.GetAddOnMetadata) or _G.GetAddOnMetadata
+    if type(getMeta) ~= "function" then return nil end
+    local ok, value = pcall(getMeta, ADDON, field)
+    if ok and type(value) == "string" and value ~= "" then return value end
+    return nil
+end
+
+function Api:MediaLevel()
+    return tonumber(Api:AddonMeta("X-Media")) or 0
+end
+
+function Api:MediaReady()
+    if Api.mediaReady == nil then
+        Api.mediaReady = Api:MediaLevel() >= Api.MEDIA_STAMP_ICON
+    end
+    return Api.mediaReady
+end
+
+-- Загрузить шрифт из файла аддона в объект шрифта. true - клиент шрифт принял.
+--
+-- SetFont отвечает, годится ли файл (истина или пусто). Клиент, который не
+-- отвечает ничего, спрашиваем вторым способом: у объекта шрифта, которому файл
+-- не подошёл, шрифта нет, и GetFont возвращает пусто.
+function Api:LoadFont(font, file, size)
+    local ok, loaded = pcall(function()
+        local path = Api.MEDIA .. file
+        local set = font:SetFont(path, size, "")
+        if set == false then return false end
+        local now = font.GetFont and font:GetFont() or nil
+        if type(now) ~= "string" or now == "" then return false end
+        -- Путь клиент возвращает в своём написании (регистр, косые черты):
+        -- сравниваем по имени файла.
+        local name = file:match("([^\\/]+)$") or file
+        return now:lower():gsub("/", "\\"):find(name:lower(), 1, true) ~= nil
+    end)
+    return (ok and loaded) and true or false
+end
+
+function Api:FontsReady()
+    if Api.fontsReady ~= nil then return Api.fontsReady end
+    Api.fontsReady = false
+    if Api:MediaLevel() < Api.MEDIA_STAMP_FONTS then return false end
+    local create = _G.CreateFont
+    if type(create) ~= "function" then return false end
+    local ok, probe = pcall(function()
+        return _G.ForeverPilotFontProbe or create("ForeverPilotFontProbe")
+    end)
+    if not (ok and probe) then return false end
+    Api.fontsReady = Api:LoadFont(probe, Api.MEDIA_PROBE, 12)
+    return Api.fontsReady
+end
+
+function Api:ItemCooldownRemaining(itemID)
+    itemID = tonumber(itemID)
+    if not itemID then return nil end
+    local C = _G.C_Container
+    local fn = (type(C) == "table" and C.GetItemCooldown) or _G.GetItemCooldown
+    if type(fn) ~= "function" then return nil end
+    local ok, left = pcall(cooldownLeft, fn, itemID, Api:Now())
+    if not ok or type(left) ~= "number" then return nil end
+    return left
+end
+
+-- ИГРОК ЧТО-ТО ПРОИЗНОСИТ ИЛИ ДЕЛАЕТ ВЕЩЬ ----------------------------------
+--
+-- Крафт - тоже произнесение: окно профессии шлёт событие на каждую сделанную
+-- вещь, и пересчёт на каждое из них дёргал бы кадр всю очередь крафта. Пока
+-- полоска заклинания идёт, пересчёт ждёт (Main:ShouldDefer).
+--
+-- Имена функций у клиентов разные: с единицей (UnitCastingInfo) и без
+-- (CastingInfo старой классики). Нет ни одной - ответ «нет», и пересчёт идёт
+-- как раньше.
+-- Проверка «ответ не пустой» делается ВНУТРИ защищённого вызова: клиент может
+-- вернуть значение, которое нельзя ни сравнивать, ни проверять на истинность
+-- («секретное»), и тогда ошибка остаётся здесь, а не роняет пересчёт.
+local function castsWithUnit(fn) return fn("player") ~= nil end
+local function castsBare(fn) return fn() ~= nil end
+local CAST_WITH_UNIT = { "UnitCastingInfo", "UnitChannelInfo" }
+local CAST_BARE = { "CastingInfo", "ChannelInfo" }
+function Api:PlayerCasting()
+    local G = _G
+    for i = 1, #CAST_WITH_UNIT do
+        local fn = G[CAST_WITH_UNIT[i]]
+        if type(fn) == "function" then
+            local ok, casting = pcall(castsWithUnit, fn)
+            if ok and casting == true then return true end
+        end
+    end
+    for i = 1, #CAST_BARE do
+        local fn = G[CAST_BARE[i]]
+        if type(fn) == "function" then
+            local ok, casting = pcall(castsBare, fn)
+            if ok and casting == true then return true end
+        end
+    end
+    return false
+end
+
+-- БАФФЫ НА ИГРОКЕ ----------------------------------------------------------
+--
+-- До сих пор аддон не читал их вовсе. Слова игрока: «он должен учитывать всё -
+-- сумки, то, что поставлено от костра, баффы, которые на мне». Чтение дешёвое
+-- (до сорока обращений за проход, и только когда проход вообще делается) и
+-- ничего не меняет в игре.
+--
+-- Два пути, оба под защитой: современный C_UnitAuras и старый UnitBuff. Нет ни
+-- одного - возвращается пустой список и nil вместо имени пути, и это НЕ то же
+-- самое, что «баффов нет»: вызывающий обязан различать.
+--   { name, spellID, expires, stacks }
+--
+-- ЗНАЧЕНИЕ МОЖЕТ БЫТЬ «СЕКРЕТНЫМ». У этого клиента есть значения, которые
+-- можно держать в переменной, но нельзя сравнивать, складывать и склеивать (у
+-- соседнего аддона на них целый файл - SecretAuraRanks). Поэтому каждое поле
+-- баффа проходит через plain*: операция над ним делается внутри защищённого
+-- вызова, и секретное поле становится nil, а не ошибкой посреди пересчёта.
+Api.MAX_AURAS = 40
+local function plainString(v)
+    if type(v) ~= "string" then return nil end
+    if #v == 0 then return nil end
+    return v .. ""
+end
+local function plainNumber(v)
+    if type(v) ~= "number" then return nil end
+    return v + 0
+end
+local function plain(kind, v)
+    -- Никаких сравнений снаружи защищённого вызова - даже с nil.
+    local isSecret = _G.issecretvalue
+    if type(isSecret) == "function" then
+        local okS, secret = pcall(isSecret, v)
+        if okS and secret then return nil end
+    end
+    local ok, out = pcall(kind, v)
+    if ok then return out end
+    return nil
+end
+Api.PlainString = function(v) return plain(plainString, v) end
+Api.PlainNumber = function(v) return plain(plainNumber, v) end
+
+local function auraFields(a)
+    return a.name, a.spellId, a.expirationTime, a.applications
+end
+function Api:PlayerAuras()
+    local out = {}
+    local CU = _G.C_UnitAuras
+    if type(CU) == "table" and type(CU.GetAuraDataByIndex) == "function" then
+        for i = 1, Api.MAX_AURAS do
+            local ok, a = pcall(CU.GetAuraDataByIndex, "player", i, "HELPFUL")
+            if not ok or type(a) ~= "table" then break end
+            local okF, name, spellID, expires, stacks = pcall(auraFields, a)
+            if okF then
+                name = plain(plainString, name)
+                spellID = plain(plainNumber, spellID)
+                -- Бафф без читаемого имени и без номера сравнивать не с чем.
+                if name or spellID then
+                    out[#out + 1] = {
+                        name = name, spellID = spellID,
+                        expires = plain(plainNumber, expires),
+                        stacks = plain(plainNumber, stacks),
+                    }
+                end
+            end
+        end
+        return out, "C_UnitAuras.GetAuraDataByIndex"
+    end
+    local UB = _G.UnitBuff
+    if type(UB) == "function" then
+        for i = 1, Api.MAX_AURAS do
+            local ok, name, _, count, _, _, expires, _, _, _, spellID =
+                pcall(UB, "player", i, "HELPFUL")
+            if not ok then break end
+            -- «Баффы кончились» - это настоящий nil. Сравнение с nil тоже идёт
+            -- под защитой: упало - значит имя есть, но секретное.
+            local okN, none = pcall(rawequal, name, nil)
+            if okN and none then break end
+            name = plain(plainString, name)
+            spellID = plain(plainNumber, spellID)
+            if name or spellID then
+                out[#out + 1] = {
+                    name = name, spellID = spellID,
+                    expires = plain(plainNumber, expires),
+                    stacks = plain(plainNumber, count),
+                }
+            end
+        end
+        return out, "UnitBuff"
+    end
+    return out, nil
+end
+
+-- ЧТО ИМЕННО НАЛОЖЕНО НА ВЕЩЬ - СЛОВАМИ, ЕСЛИ ИГРА ИХ ОТДАЁТ.
+--
+-- От наложенных чар в ссылке предмета есть только номер, и по номеру сказать,
+-- что они дают, нечем. Но подсказка предмета эту строку показывает, и на
+-- современном клиенте подсказку можно прочитать данными (C_TooltipInfo), где у
+-- строки чар есть свой тип. Берётся только такая строка, по типу: угадывать её
+-- по цвету или по месту в подсказке значило бы выдавать чужую строку за чары.
+-- Нет функции или типа - nil, и на экране остаётся номер, как раньше.
+--
+-- Ответ помнится на пару «предмет + номер чар»: пока они те же, текст тот же.
+--
+-- «Не нашёл» помнится недолго (ENCHANT_TEXT_RETRY секунд): сразу после входа
+-- подсказка бывает неполной, и запомнить этот ответ навсегда значило бы
+-- остаться с номером до конца сеанса. А спрашивать каждый проход незачем.
+-- «Чары: +4 к интеллекту» -> «+4 к интеллекту». Приставку ставит сам клиент
+-- (его строка ENCHANTED_TOOLTIP_LINE, «Чары: %s»), и в карточке она давала
+-- «чары «Чары: +4 к интеллекту»» - увидено в игре 2026-11-21. Приставка
+-- берётся у клиента; два написания рядом - запас на случай, если строки нет.
+local ENCHANT_PREFIXES = { "Чары: ", "Enchanted: " }
+local function stripEnchantPrefix(text)
+    local fmt = _G.ENCHANTED_TOOLTIP_LINE
+    if type(fmt) == "string" then
+        local prefix = fmt:match("^(.-)%%s")
+        if prefix and #prefix > 0 and text:sub(1, #prefix) == prefix then
+            return text:sub(#prefix + 1)
+        end
+    end
+    for i = 1, #ENCHANT_PREFIXES do
+        local prefix = ENCHANT_PREFIXES[i]
+        if text:sub(1, #prefix) == prefix then return text:sub(#prefix + 1) end
+    end
+    return text
+end
+function Api.EnchantLineOf(getTooltip, invID, kind)
+    local data = getTooltip("player", invID)
+    if type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
+    for _, line in ipairs(data.lines) do
+        if type(line) == "table" and line.type == kind
+           and type(line.leftText) == "string" and line.leftText ~= "" then
+            -- Цветовые коды клиента из текста убираются: это разметка.
+            local clean = line.leftText:gsub("|c%x%x%x%x%x%x%x%x", "")
+            clean = clean:gsub("|r", "")
+            return stripEnchantPrefix(clean)
+        end
+    end
+    return nil
+end
+local enchantTextMemo, enchantTextMissAt = {}, {}
+Api.ENCHANT_TEXT_RETRY = 60
+Api.enchantTextPath = nil   -- true/false после первой попытки; nil - не пробовали
+function Api:InventoryEnchantText(invID, itemID, enchantID)
+    local key = tostring(itemID) .. ":" .. tostring(enchantID)
+    local memo = enchantTextMemo[key]
+    if memo ~= nil then return memo end
+    local TI = _G.C_TooltipInfo
+    local kinds = _G.Enum and _G.Enum.TooltipDataLineType
+    local kind = type(kinds) == "table" and kinds.ItemEnchantmentPermanent or nil
+    if type(TI) ~= "table" or type(TI.GetInventoryItem) ~= "function" or not kind then
+        Api.enchantTextPath = false
+        return nil
+    end
+    Api.enchantTextPath = true
+    local now = Api:Now()
+    local missed = enchantTextMissAt[key]
+    if missed and (now - missed) < Api.ENCHANT_TEXT_RETRY then return nil end
+    -- Весь разбор - в защищённом вызове: что бы ни лежало в подсказке, наружу
+    -- выходит строка или nil.
+    local ok, text = pcall(Api.EnchantLineOf, TI.GetInventoryItem, invID, kind)
+    if not ok or type(text) ~= "string" or text == "" then text = nil end
+    if text then
+        enchantTextMemo[key] = text
+        enchantTextMissAt[key] = nil
+    else
+        enchantTextMissAt[key] = now
+    end
+    return text
+end
+
 function Api:Equipped()
     if not Api.has.invItemLink then
         if ns.Diag then
@@ -1672,6 +2043,11 @@ function Api:Equipped()
             itemID = U.itemIDFromLink(link),
             enchantID = U.enchantIDFromLink(link),
         }
+        -- Текст чар - только там, где чары есть, и только если игра его отдаёт.
+        if out[key].enchantID then
+            out[key].enchantText = Api:InventoryEnchantText(invID,
+                out[key].itemID, out[key].enchantID)
+        end
     end
     for key, invID in pairs(ns.SLOT_INVENTORY_ID) do readSlot(key, invID) end
     for key, ids in pairs(ns.SLOT_INVENTORY_PAIRS) do
@@ -1683,6 +2059,20 @@ function Api:Equipped()
         ns.Diag:Call("GetInventoryItemLink", U.count(out) > 0,
             string.format("слотов занято %d, из них с чарами %d",
                 U.count(out), enchanted))
+        -- Отдаёт ли клиент слова чар: по этой строке в файле диагностики видно,
+        -- есть ли на этом клиенте читаемая подсказка, и сколько строк нашлось.
+        if enchanted > 0 then
+            local worded = 0
+            for _, e in pairs(out) do if e.enchantText then worded = worded + 1 end end
+            -- true - слова есть, false - функция есть, но строк не нашла,
+            -- nil - функции нет вовсе.
+            local got = nil
+            if Api.enchantTextPath == true then got = (worded > 0) end
+            ns.Diag:Call("C_TooltipInfo.GetInventoryItem", got,
+                (Api.enchantTextPath == false)
+                    and "функции или типа строки чар на этом клиенте нет — остаются номера"
+                    or string.format("слова чар прочитаны у %d из %d", worded, enchanted))
+        end
     end
     return out, CONF.EXACT
 end

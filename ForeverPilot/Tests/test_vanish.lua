@@ -564,37 +564,37 @@ local function nowTabText(env)
     return table.concat(plain, "\n"), labels
 end
 
--- ОБЪЯВЛЕНО - ЗНАЧИТ, ЕСТЬ СТРОКА И ЕСТЬ ПОДРОБНОСТИ. Два разных вопроса.
+-- ОБЪЯВЛЕНО - ЗНАЧИТ, ЕСТЬ ЧИСЛО НА ЭКРАНЕ И ЕСТЬ ПОДРОБНОСТИ. Два разных вопроса.
 --
 -- Над списком стояла простыня: четыре абзаца про порог, профиль, длину списка и
 -- окно профессий - пять строк до первого совета. Игрок сказал про это «кратко и
--- без воды», и он прав. Но сократить - не значит замолчать, поэтому проверяется
--- и то и другое: НАД СПИСКОМ одна короткая строка с числом и с путём к
--- подробностям, ПОД КУРСОРОМ - сами подробности, с теми же числами и словами,
--- что были раньше в тексте над списком.
+-- без воды»; потом (2026-11-21) назвал лишней и строку с причинами. Но
+-- сократить - не значит замолчать, поэтому проверяется и то и другое: В ШАПКЕ
+-- СПИСКА, в строке «N советов», стоит число не показанных, ПОД КУРСОРОМ у неё -
+-- сами подробности, с теми же числами и словами, что были раньше.
 local function nowStrip(env)
     local ns = env.ns
     ns.MainFrame:Build()
     ns.MainFrame:Select("NOW")
     ns.MainFrame:RenderActive()
-    local strip = ns.TabNow.strip
-    if not (strip and strip.__shown) then return nil, "" end
-    local line = S.plain(strip.text:GetText() or "")
+    local summary = ns.TabNow.summary
+    local line = S.plain(summary:GetText() or "")
     local details = {}
-    for _, d in ipairs(strip.details or {}) do details[#details + 1] = S.plain(d) end
-    return line, table.concat(details, "\n")
+    for _, d in ipairs(ns.TabNow.summaryTip or {}) do details[#details + 1] = S.plain(d) end
+    -- «Сказано» - это когда строка называет не показанное: «ещё N не показано»
+    -- или «N из M советов». Простое «9 советов» ничего не объявляет.
+    local says = line:find("не показано", 1, true) ~= nil or line:find(" из ", 1, true) ~= nil
+    return says and line or nil, table.concat(details, "\n"), line
 end
 
--- Строка над списком обязана быть одной, короткой и с путём к подробностям.
+-- Строка в шапке обязана быть одной и короткой.
 local function checkStripLine(env, line, where)
     local ns = env.ns
-    H.ok(line ~= nil, where .. ": над списком есть строка — " .. tostring(line))
+    H.ok(line ~= nil, where .. ": в шапке списка сказано о не показанном — " .. tostring(line))
     if not line then return end
-    H.eq(line:find("\n", 1, true), nil, where .. ": она ровно одна, без переносов")
+    H.eq(line:find("\n", 1, true), nil, where .. ": строка ровно одна, без переносов")
     H.ok(ns.Util.charLen(line) <= 110,
         where .. ": и короткая (" .. ns.Util.charLen(line) .. " символов)")
-    H.ok(line:find(ns.TabNow.DETAILS_HINT, 1, true) ~= nil,
-        where .. ": путь к подробностям назван в ней самой")
 end
 
 H.suite("Фильтр над списком: на экране сказано, сколько советов он не показывает")
@@ -607,7 +607,7 @@ do
     -- Без фильтра - никаких оговорок.
     ns.Config:SetChip(ns.CHIP.ALL)
     local line = nowStrip(env)
-    H.eq(line, nil, "без фильтра строки над списком нет вовсе")
+    H.eq(line, nil, "без фильтра о не показанном не сказано ничего")
 
     -- Фильтр «Чары» оставляет часть списка.
     ns.Config:SetChip(ns.CHIP.ENCHANT)
@@ -617,10 +617,14 @@ do
     line, details = nowStrip(env)
     checkStripLine(env, line, "фильтр")
     if line then
-        H.ok(line:find("«" .. ns.CHIP_LABEL[ns.CHIP.ENCHANT] .. "»", 1, true) ~= nil,
-            "в ней назван сам фильтр: " .. line)
-        H.ok(line:find(tostring(total - shown), 1, true) ~= nil,
-            "и число не показанных: " .. (total - shown))
+        -- Сам фильтр назван заголовком списка и выделен слева, со счётчиком; в
+        -- строке - сколько из скольких.
+        H.ok(line:find(shown .. " из " .. total, 1, true) ~= nil,
+            "в ней сказано, сколько из скольких: " .. line)
+        H.eq(S.plain(ns.TabNow.heading:GetText() or ""), ns.CHIP_LABEL[ns.CHIP.ENCHANT],
+            "а заголовок списка называет сам фильтр")
+        H.eq(ns.TabNow.filterChips[ns.CHIP.ENCHANT].selected, true,
+            "и слева он выделен")
     end
     local full = details:match("[^\n]*Фильтр «[^\n]*")
     H.ok(full ~= nil, "под курсором — подробная строка про фильтр: " .. tostring(full))
@@ -645,7 +649,7 @@ do
     -- Щелчок по «Всё» возвращает весь список и убирает строку.
     ns.Config:SetChip(ns.CHIP.ALL)
     line = nowStrip(env)
-    H.eq(line, nil, "после «Всё» строки нет")
+    H.eq(line, nil, "после «Всё» о не показанном снова ни слова")
     H.eq(#ns.ActionEngine:Filtered(ns.CHIP.ALL), total, "и показаны все " .. total)
 end
 
@@ -672,9 +676,10 @@ do
     local line, details = nowStrip(env)
     checkStripLine(env, line, "профиль")
     if line then
-        H.ok(line:find("«" .. label .. "»", 1, true) ~= nil,
-            "в ней назван сам профиль: " .. line)
-        H.ok(line:find(tostring(dropped), 1, true) ~= nil, "и сколько: " .. dropped)
+        H.ok(line:find("ещё " .. dropped .. " не показано", 1, true) ~= nil,
+            "в ней сказано, сколько не показано: " .. line)
+        H.eq(ns.TabNow.profileChips[profile].selected, true,
+            "а сам профиль выделен вкладкой над списком")
     end
     local full = details:match("[^\n]*Профиль «[^\n]*")
     H.ok(full ~= nil, "под курсором — подробная строка про профиль: " .. tostring(full))
@@ -688,7 +693,7 @@ do
     ns.PROFILE_EXCLUDE[profile] = {}
     H.build(env)
     line, details = nowStrip(env)
-    H.eq(line, nil, "профиль ничего не убрал — строки нет")
+    H.eq(line, nil, "профиль ничего не убрал — о не показанном ни слова")
     ns.PROFILE_EXCLUDE[profile] = saved
 end
 
@@ -751,12 +756,11 @@ do
     line, details = nowStrip(env)
     checkStripLine(env, line, "порог")
     if line then
-        H.ok(line:find(tostring(money), 1, true) ~= nil,
-            "в ней сказано, сколько убрано: " .. money)
-        H.ok(line:find("порог", 1, true) ~= nil, "и что это порог: " .. line)
-        -- А ЧИСЛА ПОРОГА, ПОЛОСЫ И РАЗДЕЛА НАСТРОЕК В НЕЙ НЕТ, И ЭТО НАРОЧНО:
+        H.ok(line:find("ещё " .. money .. " не показано", 1, true) ~= nil,
+            "в ней сказано, сколько не показано: " .. line)
+        -- А ПРИЧИНЫ, ЧИСЛА ПОРОГА И РАЗДЕЛА НАСТРОЕК В НЕЙ НЕТ, И ЭТО НАРОЧНО:
         -- это ответ на вопрос, который игрок ещё не задал, и место ему под
-        -- курсором. Строка над списком отвечает «часть советов не показана», а
+        -- курсором. Строка в шапке отвечает «часть советов не показана», а
         -- не рассказывает, как устроен порог.
         H.eq(line:find(ns.ActionEngine.MONEY_FLOOR_SECTION, 1, true), nil,
             "раздела настроек в короткой строке нет — он в подробностях")

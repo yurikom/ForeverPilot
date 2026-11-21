@@ -212,7 +212,7 @@ local function initialize()
                     .. " по «" .. tostring(U.profLabel(prof)) .. "»")
             end
         end
-        ns.MainFrame:Rebuild()
+        ns.MainFrame:Rebuild(false, reasons)
         -- ГОРИЗОНТ - ДО СЛЕПКА, И ЭТО ВАЖНО ИМЕННО В ЭТОМ ПОРЯДКЕ. Слепок цен
         -- берёт список предметов у движка, а движок спрашивает у горизонта, что
         -- понадобится позже. Собери горизонт после слепка - и материалы на
@@ -226,6 +226,20 @@ local function initialize()
     end)
     ns.Events:On("combat", function(inCombat)
         ns.MainFrame:OnCombat(inCombat)
+    end)
+    -- Окно профессии открыли, обновили или закрыли: книга рецептов ставит
+    -- обещанный поиск, а кнопки на советах меняют подпись.
+    ns.Events:On("tradeskill", function(phase)
+        local message, changed = ns.RecipeBook:OnTradeSkill(phase)
+        if message then Api:Print(message) end
+        if changed and ns.MainFrame.RefreshIfShown then ns.MainFrame:RefreshIfShown() end
+    end)
+    -- Аукцион открыли или закрыли: на советах появляется или пропадает кнопка
+    -- «Искать на аукционе». Пересчёт для этого не нужен - только перерисовка.
+    ns.Events:On("auction", function(what)
+        if (what == "open" or what == "close") and ns.MainFrame.RefreshIfShown then
+            ns.MainFrame:RefreshIfShown()
+        end
     end)
     ns.Events:On("merchant", function(phase)
         -- Закрытое окно читать нечего: фаза «close» нужна книге закупок, а не
@@ -436,10 +450,12 @@ function Main:RegisterSlash()
         if msg == "now" or msg == "сейчас" then
             ns.MainFrame:Show(); ns.MainFrame:Select("NOW"); return
         end
+        -- «char» осталась от раздела «Персонаж», которого больше нет: команда
+        -- открывает окно на «Советах», а не отвечает справкой.
         if msg == "char" or msg == "персонаж" then
-            ns.MainFrame:Show(); ns.MainFrame:Select("CHAR"); return
+            ns.MainFrame:Show(); ns.MainFrame:Select("NOW"); return
         end
-        if msg == "craft" or msg == "крафт" then
+        if msg == "craft" or msg == "крафт" or msg == "buy" or msg == "покупки" then
             ns.MainFrame:Show(); ns.MainFrame:Select("CRAFT"); return
         end
         if msg == "config" or msg == "настройки" then
@@ -555,7 +571,7 @@ function Main:RegisterSlash()
             end
         end
 
-        Api:Print("команды: /fp • now • char • craft • config • scan • reset • api"
+        Api:Print("команды: /fp • now • buy (покупки) • config • scan • reset • api"
             .. " • panel (убрать/вернуть панель шага)"
             .. " • undo (вернуть последнее скрытое) • show (вернуть все)"
             .. " • hidden • diag • diag full • diag reset"

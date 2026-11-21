@@ -403,9 +403,14 @@ do
     end
 end
 
-H.suite("Арбитраж: наценка выше порога «не верю» — карточка помечена сомнительной")
+H.suite("Арбитраж: наценка выше порога «не верю» — совета в списке нет, причина названа")
 do
     -- 40с -> 9з 98с, как Чёрный лотос в живом прогоне: наценка 23.7 раз.
+    --
+    -- Раньше такая карточка оставалась на экране с пометкой «сомнительно». В
+    -- живом списке игрока (2026-11-21) это были пять советов купить у торговца
+    -- то, чего он по такой цене не продаёт. Совет, которому не верит сам
+    -- советчик, в список больше не идёт; находка при этом не пропадает молча.
     local env = arbEnv { ask = 4000, auction = 99800 }
     local ns = env.ns
     H.rescan(env)
@@ -417,23 +422,25 @@ do
             "вердикт: такой наценке я не верю")
     end
     local cards = H.build(env)
-    local c = arbCard(cards, ns)
-    H.ok(c ~= nil, "карточка на экране осталась")
-    if c then
-        H.ok(ns.Util.contains(c.benefit or "", "сомнительно"),
-            "заголовок предупреждает: " .. tostring(c.benefit))
-        H.eq(c.conf, ns.CONF.UNKNOWN, "достоверность снята совсем")
-        H.ok(c.suspect ~= nil, "и карточка помечена сомнительной")
-        H.ok(ns.Util.contains(c.why or "", "не сходятся"),
-            "текст объясняет, что числа не сходятся")
-    end
-    -- И это видно в диагностике, а не только на экране.
+    H.eq(arbCard(cards, ns), nil, "карточки на экране нет")
+    local hidden = ns.ActionEngine.meta.arbitrageImpossible or {}
+    H.eq(#hidden, 1, "находка лежит в отдельном списке движка")
+    local note = ns.ActionEngine.branchNote.arbitrage or ""
+    H.ok(ns.Util.contains(note, "наценкой, которой не бывает"),
+        "пустая ветка называет причину: " .. note)
+    H.ok(ns.Util.contains(note, "ошибка в данных"), "и говорит, что это ошибка данных")
+    H.ok((ns.Diag:Init().counters["arbitrage.impossibleNotShown"] or 0) >= 1,
+        "в счётчиках это есть")
+    -- И это видно в диагностике, а не только в заметке ветки.
     local susp = ns.Diag:Init().suspicious or {}
     local found = false
     for _, s in ipairs(susp) do
-        if s.code == "arbitrage-markup-impossible" then found = true end
+        if s.code == "arbitrage-markup-impossible"
+            and ns.Util.contains(s.text or "", "в список не поставлено") then
+            found = true
+        end
     end
-    H.ok(found, "странность записана в диагностику")
+    H.ok(found, "странность записана в диагностику с пометкой, что совет не показан")
 end
 
 -- ПОЛЯРНОСТЬ ЦЕНЫ НА ПУТИ ЧЕРЕЗ CODEX ====================================
@@ -491,6 +498,69 @@ do
     if opp then
         H.eq(opp.ask, 150, "цена торговца взята из Codex")
         H.eq(opp.askSrc, "codex", "и источник назван")
+    end
+end
+
+H.suite("Арбитраж: непроверенная цена торговца и наценка выше наблюдавшейся — не верю")
+do
+    -- Живая жалоба (маг 31 ур., 2026-11-21): «Купить и перепродать: Лотос
+    -- смерти, +10з 80с за штуку» - у торговца «~60с (оценка)», на аукционе 12з.
+    -- Наценка x19 не дотянула до потолка x20, и карточка стояла с прибылью
+    -- крупными цифрами. Цену торговца при этом в игре никто не видел.
+    local env = H.load()
+    local ns = env.ns
+    env.money = 58052
+    env.auctionator = true
+    H.item(env, 7790, { name = "Лотос смерти", sellPrice = 100, stackCount = 20 })
+    env.prices[7790] = 120000
+    env.codexItems[7790] = {
+        sources = { { type = "vendor", npc = 263384, cost = 6000,
+                      from = { "recordings", "questie", "pfquest" } } },
+    }
+    env.codexNpcs[263384] = {
+        name = "Mister Graphed", subName = "Agent of the Black Market",
+        roles = { "vendor" }, spawns = { { map = 2548, x = 78.2, y = 51.9 } },
+    }
+    -- В круг поиска предмет попадает так же, как в игре: по нему есть история
+    -- цен (см. VA:KnownItems).
+    ns.Config:Get().priceHistory = ns.Config:Get().priceHistory or {}
+    ns.Config:Get().priceHistory[7790] = { [20777] = 120000 }
+    H.rescan(env)
+    ns.PriceProvider:BeginPass()
+    local opp = ns.VendorArbitrage:Evaluate(7790)
+    H.ok(opp ~= nil, "возможность не выбрасывается молча")
+    if opp then
+        H.eq(opp.askConf, ns.CONF.ESTIMATE, "цена торговца — оценка из чужой базы")
+        H.ok(opp.markup > ns.VendorArbitrage.MARKUP_NOTE
+            and opp.markup < ns.VendorArbitrage.MARKUP_LIMIT,
+            string.format("наценка между порогами: x%.1f", opp.markup))
+        H.eq(opp.markupVerdict and opp.markupVerdict.code, "markup-impossible",
+            "вердикт: непроверенной цене при такой наценке не верю")
+        H.eq(opp.markupVerdict and opp.markupVerdict.unverifiedAsk, true,
+            "и причина записана: цену никто не видел")
+        H.eq(opp.conf, ns.CONF.UNKNOWN, "достоверность снята совсем")
+    end
+    local cards = H.build(env)
+    H.eq(arbCard(cards, ns), nil,
+        "карточки на экране нет: цену торговца никто не видел, а наценка невозможная")
+    H.eq(#(ns.ActionEngine.meta.arbitrageImpossible or {}), 1,
+        "находка лежит в отдельном списке движка, а не пропала")
+end
+
+H.suite("Арбитраж: та же наценка на цене, которую игрок видел сам, — только упомянута")
+do
+    -- Свою цену торговца игрок видел у прилавка: ей верить есть чем, и
+    -- правило выше её не трогает.
+    local env = arbEnv { auction = 2000 }
+    local ns = env.ns
+    H.rescan(env)
+    ns.PriceProvider:BeginPass()
+    local opp = ns.VendorArbitrage:Evaluate(2324)
+    H.ok(opp ~= nil, "возможность есть")
+    if opp then
+        H.ok(opp.askConf ~= ns.CONF.ESTIMATE, "цена не оценка: " .. tostring(opp.askConf))
+        H.eq(opp.markupVerdict and opp.markupVerdict.code, "markup-note",
+            "вердикт остался «стоит упомянуть»")
     end
 end
 

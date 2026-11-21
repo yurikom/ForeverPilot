@@ -559,15 +559,179 @@ end
 
 -- Общее состояние. Остаётся ради одного: экрану надо знать, рисовать кнопку
 -- или нет, и какими словами объяснить её отсутствие.
-function RecipeBook:ShowState()
+--
+-- С 2026-11-21 состояний два. Окно аддон по-прежнему не открывает, но в окне,
+-- которое игрок открыл сам, может оставить в списке один рецепт - поиском по
+-- имени (Api:SetRecipeNameFilter). Тогда у совета есть кнопка:
+--   ready - клиент умеет искать по имени, рецепт известен по имени, и игра этот
+--           вызов ни разу не блокировала;
+--   none  - всё остальное: кнопки нет, на экране строка «что открыть и что
+--           найти», как раньше.
+RecipeBook.SHOW_LABEL = "Показать в профессии"
+RecipeBook.UNSHOW_LABEL = "Вернуть весь список"
+-- Сколько живёт «покажу, когда откроете»: дольше - это уже забытая кнопка, и
+-- внезапно суженный список через час был бы загадкой.
+RecipeBook.PENDING_SECONDS = 600
+-- Сколько секунд после постановки поиск считается «ещё ставится». Окно
+-- профессии при открытии само сбрасывает свои фильтры, и если это случается
+-- после нашего вызова, поиск надо поставить снова - иначе кнопка нажата, а
+-- список целый. Дольше этого срока другой текст в поиске - уже рука игрока.
+RecipeBook.SETTLE_SECONDS = 1.5
+
+RecipeBook.pending = nil        -- { recipeID, name, profession, at }
+RecipeBook.applied = nil        -- { recipeID, name, profession }
+RecipeBook.filterBroken = nil   -- игра заблокировала или вызов упал
+
+local function filterAllowed()
+    if RecipeBook.filterBroken then return false end
+    local cfg = ns.Config and ns.Config.Get and ns.Config:Get() or nil
+    if cfg and cfg.recipeFilterBlocked then return false end
+    return Api.CanFilterRecipes and Api:CanFilterRecipes() or false
+end
+
+function RecipeBook:ShowState(recipeID)
+    local recipe = recipeID and self:Get(recipeID) or nil
+    if recipe and type(recipe.name) == "string" and recipe.name ~= "" and filterAllowed() then
+        local shown = self.applied and self.applied.recipeID == recipeID
+        return {
+            state = "ready",
+            label = shown and RecipeBook.UNSHOW_LABEL or RecipeBook.SHOW_LABEL,
+            shown = shown or nil,
+            armed = (self.pending and self.pending.recipeID == recipeID) or nil,
+        }
+    end
     return { state = "none", note = RecipeBook.NOTE, short = RecipeBook.SHORT }
 end
 
--- Кнопки показа рецепта нет никогда. Функция оставлена потому, что ответ на
--- вопрос «можно ли нажать» спрашивают и список, и панель, и ответ у них обязан
--- быть один.
-function RecipeBook:CanShow()
-    return false
+-- Ответ на вопрос «можно ли нажать» спрашивают и список, и панель, и ответ у
+-- них обязан быть один. Без номера рецепта ответ «нет»: кнопка бывает только у
+-- конкретного рецепта.
+function RecipeBook:CanShow(recipeID)
+    return self:ShowState(recipeID).state == "ready"
+end
+
+-- Одна и та же профессия под двумя написаниями: в книге она названа так, как
+-- её назвал источник, а окно отдаёт имя на языке клиента.
+local function sameProfession(a, b)
+    if not (a and b) then return false end
+    if a == b then return true end
+    return U.profLabel(a) == U.profLabel(b)
+end
+
+-- Открыто ли сейчас окно этой профессии. Второй ответ - имя открытого окна.
+function RecipeBook:WindowOpenFor(profession)
+    local open = Api:OpenProfessionName()
+    if type(open) ~= "string" or open == "" then return false, nil end
+    if not profession then return true, open end
+    return sameProfession(open, profession), open
+end
+
+local function profText(profession)
+    if profession then return "«" .. tostring(U.profLabel(profession)) .. "»" end
+    return "окно профессии"
+end
+
+function RecipeBook:ApplyFilter(want)
+    local ok, why, detail = Api:SetRecipeNameFilter(want.name)
+    if not ok then
+        if why == "error" then
+            RecipeBook.filterBroken = { error = detail }
+            if ns.Diag then
+                ns.Diag:Log("поиск в окне профессии не поставился", { error = detail })
+            end
+            return false, "игра не приняла поиск по имени — найдите «" .. want.name
+                .. "» в окне профессии сами. Подробности записал в /fp diag."
+        end
+        if why == "combat" then return false, "в бою окно профессии не трогаю" end
+        return false, self:FindText(want.recipeID) or RecipeBook.SHORT
+    end
+    want.settleUntil = Api:Now() + RecipeBook.SETTLE_SECONDS
+    self.applied, self.pending = want, nil
+    return true, "оставил в списке профессии только «" .. want.name
+        .. "». Вернуть весь список — та же кнопка ещё раз."
+end
+
+-- Вернуть весь список. Зовётся вторым нажатием и при закрытии окна.
+function RecipeBook:ClearShown(silent)
+    local had = self.applied
+    self.applied = nil
+    if not had then return false, nil end
+    if self:WindowOpenFor(nil) then
+        -- Снимаем только СВОЙ поиск: если игрок уже набрал своё, не трогаем.
+        local now = Api:RecipeNameFilter()
+        if now == nil or now == had.name then Api:SetRecipeNameFilter("") end
+    end
+    if silent then return true, nil end
+    return true, "вернул весь список рецептов"
+end
+
+-- НАЖАТИЕ КНОПКИ. Возвращает ok и одну строку для игрока.
+function RecipeBook:Show(recipeID)
+    local recipe = recipeID and self:Get(recipeID) or nil
+    if not recipe then return false, RecipeBook.SHORT end
+    if not self:CanShow(recipeID) then
+        return false, self:FindText(recipeID) or RecipeBook.SHORT
+    end
+    if self.applied and self.applied.recipeID == recipeID then
+        return self:ClearShown()
+    end
+    local want = {
+        recipeID = recipeID, name = recipe.name,
+        profession = recipe.profession, at = Api:Now(),
+    }
+    local openHere, openName = self:WindowOpenFor(recipe.profession)
+    if openHere then return self:ApplyFilter(want) end
+    -- Окно закрыто или открыта другая профессия: запоминаем и ждём.
+    self.pending = want
+    if openName then
+        return true, "сейчас открыта другая профессия. Откройте "
+            .. profText(recipe.profession) .. " — «" .. recipe.name
+            .. "» в списке найду сам."
+    end
+    return true, "откройте " .. profText(recipe.profession) .. " — «" .. recipe.name
+        .. "» в списке найду сам. Окон игры я не открываю."
+end
+
+-- ОКНО ПРОФЕССИИ ОТКРЫЛИ, ОБНОВИЛИ ИЛИ ЗАКРЫЛИ. Событий «обновили» много (по
+-- одному на каждую сделанную вещь), поэтому первым делом - дешёвый выход.
+-- Возвращает строку для игрока (или nil) и признак «на экране что-то
+-- изменилось».
+function RecipeBook:OnTradeSkill(phase)
+    if not (self.pending or self.applied) then return nil, false end
+    if phase == "close" then
+        local changed = self.applied ~= nil
+        self:ClearShown(true)
+        return nil, changed
+    end
+    local pending = self.pending
+    if pending then
+        if (Api:Now() - (pending.at or 0)) > RecipeBook.PENDING_SECONDS then
+            self.pending = nil
+            return nil, true
+        end
+        if self:WindowOpenFor(pending.profession) then
+            local _, message = self:ApplyFilter(pending)
+            return message, true
+        end
+        return nil, false
+    end
+    local applied = self.applied
+    if applied then
+        local now = Api:RecipeNameFilter()
+        if now ~= nil and now ~= applied.name then
+            -- Окно только что открылось и сбросило фильтры уже после нашего
+            -- вызова: ставим поиск ещё раз, молча.
+            if Api:Now() < (applied.settleUntil or 0) then
+                Api:SetRecipeNameFilter(applied.name)
+                return nil, false
+            end
+            -- Иначе это игрок сам поменял поиск - кнопка возвращается к
+            -- «Показать», а его текст остаётся как есть.
+            self.applied = nil
+            return nil, true
+        end
+    end
+    return nil, false
 end
 
 return RecipeBook

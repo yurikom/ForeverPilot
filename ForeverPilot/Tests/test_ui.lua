@@ -36,6 +36,9 @@ for _, name in ipairs({
     "SetHighlightTexture", "SetPushedTexture", "SetDisabledTexture",
     "SetText", "GetText", "SetFontObject", "SetJustifyH", "SetJustifyV",
     "SetTextColor", "SetWordWrap", "GetStringWidth", "GetStringHeight",
+    -- Ширина текста без переноса (по ней считается, сколько строк он займёт) и
+    -- то, что сейчас лежит в текстуре (так узнаётся, нашёл ли клиент файл).
+    "GetUnboundedStringWidth", "GetTexture",
     "SetMaxLines", "SetSpacing", "SetAlpha", "GetAlpha",
     "SetMinMaxValues", "GetMinMaxValues", "SetValue", "GetValue",
     "SetValueStep", "SetObeyStepOnDrag", "SetOrientation", "SetThumbTexture",
@@ -49,6 +52,13 @@ for _, name in ipairs({
     "Click", "Disable", "Enable", "IsEnabled", "SetHitRectInsets",
     "SetMask", "SetMaskTexture", "SetFrameLevel", "GetFrameLevel",
     "SetDrawLayer", "SetBlendMode", "SetIgnoreParentScale", "SetClipsChildren",
+    -- Окно на свой лад (2026-11-21): своя полоса прокрутки (колесо мыши и
+    -- положение списка), свой шрифт (объект шрифта: файл, тень), переход цвета
+    -- в шапке, скруглённые плашки из трёх кусков без щели между ними и предел
+    -- размера окна на старых клиентах.
+    "EnableMouseWheel", "GetVerticalScroll", "SetFont", "GetFont",
+    "SetShadowOffset", "SetShadowColor", "SetGradient", "SetSnapToPixelGrid",
+    "SetTexelSnappingBias", "SetMaxResize",
 }) do KNOWN_METHODS[name] = true end
 
 local unknownCalls, callLog = {}, {}
@@ -135,6 +145,10 @@ frameMT = {
             fn = function(self) self.__points = {} end
         elseif key == "SetTexture" then
             fn = function(self, v) self.__texture = v end
+        elseif key == "GetTexture" then
+            fn = function(self) return self.__texture end
+        elseif key == "GetUnboundedStringWidth" then
+            fn = function(self) return #(self.__text or "") * 6 end
         elseif key == "SetTexCoord" then
             fn = function(self, ...) self.__texCoord = { ... } end
         elseif key == "SetMask" or key == "SetMaskTexture" then
@@ -331,7 +345,10 @@ do
     H.ok(ns.MainFrame.host ~= nil, "контейнер вкладок создан")
     local tabs = 0
     for _ in pairs(ns.MainFrame.tabButtons or {}) do tabs = tabs + 1 end
-    H.eq(tabs, 4, "ровно четыре вкладки, не пять")
+    -- Разделов три: «Советы», «Покупки» и «Настройки». «Персонаж» и список
+    -- рецептов «Крафта» убраны: игрок спросил, зачем они (2026-11-21).
+    H.eq(tabs, 3, "ровно три раздела")
+    H.eq(ns.MainFrame.tabButtons.CHAR, nil, "раздела «Персонаж» в полосе нет")
 end
 
 H.suite("UI: каждая вкладка строится и рисуется")
@@ -407,11 +424,25 @@ do
             tostring(err))
         if ok then
             filled = filled + 1
-            -- The three lines must actually have reached the font strings.
-            H.ok(frame.title:GetText() ~= "", "   строка 1 заполнена")
-            H.ok(frame.why:GetText() ~= "", "   строка 2 заполнена")
-            H.ok(frame.need:GetText() ~= "", "   строка 3 заполнена")
-            H.ok(frame.benefit:GetText() ~= "", "   выгода справа заполнена")
+            -- В строке списка - заголовок и выгода; всё остальное стоит в
+            -- карточке совета справа.
+            H.ok(frame.title:GetText() ~= "", "   заголовок заполнен")
+            ns.TabNow:SelectCard(card)
+            H.eq(ns.Detail.card, card, "   совет открыт в карточке справа")
+            H.ok(ns.Detail.title.__shown and (ns.Detail.title:GetText() or "") ~= "",
+                "   название в карточке заполнено")
+            -- И в карточке есть содержание, а не одна шапка: суть, строки
+            -- «подпись - значение», что купить или что сделать.
+            H.ok(#ns.Detail:Shown(true) > 0, "   в карточке есть содержание совета")
+            -- Выгода стоит в строке, а если она туда не поместилась целиком -
+            -- то в карточке совета, меткой или строкой.
+            local d = ns.Detail
+            local inDetail = (d.benefit.__shown and d.benefit.text:GetText() or "")
+                .. (d.benefitLine.__shown and d.benefitLine:GetText() or "")
+            H.ok(frame.benefit:GetText() ~= "" or (frame.cut.benefit and inDetail ~= ""),
+                "   выгода заполнена - в строке или в карточке")
+            H.ok(tostring(card.benefit or "") == "" or inDetail ~= "",
+                "   и в карточке она есть всегда")
         end
     end
     H.eq(filled, #cards, "все карточки отрисованы")
@@ -672,7 +703,10 @@ do
     -- место под заметку кончилось, и проверка начала падать на правильном коде.
     -- Проверяется здесь «заметка показывается, когда есть место», а не «900
     -- пикселей достаточно», поэтому запас большой.
-    ns.TabNow.scroll.__height = 4000
+    -- Высота списка считается от высоты самого окна (Main:HostNow), поэтому
+    -- высоким делается окно, а не вложенная в него рамка.
+    local savedW, savedH = ns.MainFrame.frame:GetWidth(), ns.MainFrame.frame:GetHeight()
+    ns.MainFrame.frame:SetSize(savedW, 4000)
     local ok, err = pcall(function() ns.TabNow:Render() end)
     H.ok(ok, "отрисовка прошла", tostring(err))
 
@@ -694,12 +728,17 @@ do
     H.ok(gaps[1]:find("формул чар нет") ~= nil, "и её причина, записанная сборкой")
     H.ok(gaps[1]:find("Экипировка") == nil, "про работающую ветку ничего не пишем")
 
+    -- НА ЭКРАНЕ ЭТОГО АБЗАЦА БОЛЬШЕ НЕТ - ОН ПОД КУРСОРОМ. Игрок назвал
+    -- заметку под списком лишней и нечитаемой (2026-11-21), поэтому причины
+    -- стоят в подсказке у строки «N советов» в шапке: кто спрашивает, тот
+    -- наводит мышь.
+    local function tipText()
+        return table.concat(ns.TabNow.summaryTip or {}, "\n")
+    end
     ns.TabNow:Render()
-    H.ok(ns.TabNow.note ~= nil, "панель-заметка создана")
-    H.eq(ns.TabNow.note.__shown, true,
-        "и показана под карточками, пока в окне есть место")
-    H.ok((ns.TabNow.note.body:GetText() or ""):find("формул чар нет") ~= nil,
-        "в ней написана причина: " .. tostring(ns.TabNow.note.body:GetText()))
+    H.ok(tipText():find("формул чар нет", 1, true) ~= nil,
+        "причина молчащей ветки есть в подсказке шапки: " .. tipText())
+    H.eq(ns.TabNow.note, nil, "а абзаца под списком нет")
 
     -- Ветка без записанной причины честно помечается дефектом, а не молчит.
     ns.ActionEngine.meta.branches = {
@@ -716,7 +755,7 @@ do
     }
     ns.TabNow:Render()
     H.eq(#ns.TabNow:BranchGaps(ns.ActionEngine.meta), 0, "объяснять нечего")
-    H.eq(ns.TabNow.note.__shown, false, "и заметка скрыта")
+    H.ok(tipText():find("формул", 1, true) == nil, "и в подсказке этой строки больше нет")
 
     -- Скрытые карточки попадают в тот же список.
     ns.ActionEngine.meta.hiddenByDismissal = 4
@@ -729,12 +768,12 @@ do
         { key = "enchant", label = "Чары", count = 0, reason = "формул нет" },
     }
 
-    -- Низкое окно: карточки занимают всё место, заметка не должна вылезать
-    -- за край и отжимать список.
-    ns.TabNow.scroll.__height = 120
-    ns.TabNow:Render()
-    H.eq(ns.TabNow.note.__shown, false, "в тесном окне заметка не показывается")
-    ns.TabNow.scroll.__height = nil
+    -- Низкое окно: отрисовка не падает, и причина остаётся под курсором.
+    ns.MainFrame.frame:SetSize(savedW, 200)
+    local okLow, errLow = pcall(function() ns.TabNow:Render() end)
+    H.ok(okLow, "в тесном окне отрисовка проходит", tostring(errLow))
+    H.ok(tipText():find("формул нет", 1, true) ~= nil, "причина по-прежнему в подсказке")
+    ns.MainFrame.frame:SetSize(savedW, savedH)
 
     ns.ActionEngine.meta.branches = savedBranches
     ns.ActionEngine.meta.priceSources = savedPrices
@@ -782,9 +821,13 @@ do
     H.ok(ok, "окно рисуется с фильтром «Золото»", tostring(err))
     H.ok(#ns.ActionEngine:Filtered(ns.CHIP.GOLD) > 0,
         "и под фильтром «Золото» что-то видно")
-    H.ok((ns.TabNow.summary:GetText() or ""):find("скрыто") ~= nil,
-        "в сводке справа названо число скрытых: "
-        .. tostring(ns.TabNow.summary:GetText()))
+    -- Скрытое возвращается кнопкой в шапке списка: она есть ровно тогда,
+    -- когда есть что возвращать, и под курсором говорит, сколько.
+    H.eq(ns.TabNow.hiddenButton.__shown, true, "в шапке стоит кнопка «Вернуть скрытые»")
+    local hiddenNow = tonumber(ns.ActionEngine.meta.hiddenByDismissal) or 0
+    H.ok(hiddenNow > 0, "движок насчитал скрытые советы: " .. hiddenNow)
+    H.ok(tostring(ns.TabNow.hiddenTip):find(": " .. hiddenNow .. ".", 1, true) ~= nil,
+        "и её подсказка называет то же число: " .. tostring(ns.TabNow.hiddenTip))
 
     -- Кнопка на карточке возвращает всё.
     local restore
@@ -837,23 +880,25 @@ do
     end
 end
 
-H.suite("UI: вкладка «Крафт» работает с выбранным рецептом")
+H.suite("UI: раздел «Покупки» — общий список покупок, без списка рецептов")
 do
     ns.MainFrame:Select("CRAFT")
-    local ok, err = pcall(function() ns.TabCraft:RenderList() end)
-    H.ok(ok, "список рецептов отрисован", tostring(err))
-    ns.TabCraft.selected = 1
-    local ok2, err2 = pcall(function() ns.TabCraft:RenderPlan() end)
-    H.ok(ok2, "план выбранного рецепта отрисован", tostring(err2))
-    ns.TabCraft.selected = 2   -- the enchant: no output item
-    local ok3, err3 = pcall(function() ns.TabCraft:RenderPlan() end)
-    H.ok(ok3, "план для чар (без предмета на выходе) отрисован", tostring(err3))
-    ns.TabCraft.selected = 999999  -- does not exist
-    local ok4, err4 = pcall(function() ns.TabCraft:RenderPlan() end)
-    H.ok(ok4, "несуществующий рецепт не ломает панель", tostring(err4))
-    ns.TabCraft.selected = nil
-    local ok5, err5 = pcall(function() ns.TabCraft:RenderPlan() end)
-    H.ok(ok5, "пустой выбор не ломает панель", tostring(err5))
+    H.eq(ns.MainFrame.activeTab, "CRAFT", "раздел открыт")
+    H.eq(ns.MainFrame:TabDef("CRAFT").label, "Покупки", "и называется «Покупки»")
+    local ok, err = pcall(function() ns.TabCraft:Render() end)
+    H.ok(ok, "список покупок отрисован", tostring(err))
+    H.eq(rawget(ns.TabCraft, "RenderList"), nil, "списка рецептов в разделе больше нет")
+    H.eq(rawget(ns.TabCraft, "searchBox"), nil, "и поля поиска по рецептам тоже")
+    -- Пустой список говорит об этом словами, а не оставляет пустой экран.
+    local saved = ns.ShoppingList.Lines
+    ns.ShoppingList.Lines = function() return {} end
+    local ok2, err2 = pcall(function() ns.TabCraft:Render() end)
+    H.ok(ok2, "пустой список не ломает раздел", tostring(err2))
+    ns.ShoppingList.Lines = saved
+    -- Раздел, которого больше нет, открывает «Советы», а не пустое окно.
+    ns.MainFrame:Select("CHAR")
+    H.eq(ns.MainFrame.activeTab, "NOW", "ключ убранного раздела открывает «Советы»")
+    ns.MainFrame:Select("CRAFT")
 end
 
 H.suite("UI: настройки переключаются")
@@ -1621,8 +1666,16 @@ do
     for entry, n in pairs(seen) do list[#list + 1] = entry .. " x" .. n end
     table.sort(list)
     print("     " .. table.concat(list, ", "))
-    H.ok(seen["ScrollFrame/UIPanelScrollFrameTemplate"] ~= nil,
-        "используется только штатный шаблон прокрутки")
+    -- ШАБЛОНОВ ИГРЫ В ОКНЕ НЕТ ВОВСЕ. Раньше был один - штатная прокрутка, и на
+    -- этом клиенте она рисовалась каменными кнопками со стрелками поверх
+    -- тёмного окна (скриншот игрока, 2026-11-21). Полоса теперь своя.
+    local templated = {}
+    for entry in pairs(seen) do
+        if entry:find("/", 1, true) then templated[#templated + 1] = entry end
+    end
+    H.eq(#templated, 0, "ни один фрейм не построен по шаблону игры: "
+        .. table.concat(templated, ", "))
+    H.ok(seen["ScrollFrame"] ~= nil, "прокрутка своя, на простой рамке")
 end
 
 -- Bootstrap -------------------------------------------------------------

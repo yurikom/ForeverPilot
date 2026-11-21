@@ -1,14 +1,18 @@
 -- ForeverPilot / UI/Card.lua
 --
--- One row of the ranked list, and it is exactly three lines:
---   1. what to do, with the payoff on the right
---   2. why
---   3. what is missing, and the button
+-- Строка списка советов. В ней ОДНА строка текста и НИ ОДНОЙ КНОПКИ: слева
+-- иконка и что сделать, справа - что это даст.
 --
--- Все три строки стоят БЕЗ ПЕРЕНОСА, то есть всё, что не влезло по ширине,
--- обрезал бы клиент - по пикселям, посреди числа. Поэтому текст укорачиваем
--- сами и по измеренному месту (Card.RoomFor + W.SetFitted), а полный остаётся
--- в подсказке под курсором.
+-- ЩЕЛЧОК ПО СТРОКЕ ВЫБИРАЕТ СОВЕТ: справа от списка открывается его карточка
+-- (UI/TabNow.lua, Detail) - там всё остальное и одна золотая кнопка. Так
+-- устроено большое окно Polestar, и игрок попросил сделать так же: раньше в
+-- каждой строке было три строки текста и кнопка, и было «непонятно, на какую
+-- кнопку что, куда нажимать» (2026-11-21).
+--
+-- Строка стоит БЕЗ ПЕРЕНОСА, то есть всё, что не влезло по ширине, обрезал бы
+-- клиент - по пикселям, посреди числа. Поэтому текст укорачиваем сами и по
+-- измеренному месту (Card.RoomFor + W.SetFitted), а полный стоит в карточке
+-- справа и в подсказке под курсором.
 --
 -- Cards are pooled and reused: the list is rebuilt often and creating frames
 -- every time would churn.
@@ -19,180 +23,455 @@ local W = ns.Widgets
 local Card = {}
 ns.Card = Card
 
-Card.HEIGHT = 74
+Card.HEIGHT = 34
 
--- РАЗМЕТКА ТРЁХ СТРОК, ЧИСЛАМИ В ОДНОМ МЕСТЕ -----------------------------
+-- РАЗМЕТКА СТРОКИ, ЧИСЛАМИ В ОДНОМ МЕСТЕ.
 --
--- Игрок прислал скриншот, на котором вторая и третья строки карточки
--- НАРИСОВАНЫ ДРУГ ПОВЕРХ ДРУГА: получилась каша из «Цена «Ж…» и обрывка
--- другого текста. Это не шрифт и не чужой аддон - это была наша арифметика.
---
--- Строка «почему» висела на нижней границе строки заголовка (сверху вниз), а
--- строка «чего не хватает» - на нижней границе иконки (снизу вверх). Два
--- отсчёта от разных краёв: пока шрифт мелкий, между ними оставался зазор, а
--- при настоящих высотах шрифтов клиента (заголовок ~14, мелкий ~12) они
--- налезали друг на друга на несколько пикселей. Ни одна проверка этого не
--- видела, потому что проверять было нечего: числа стояли по месту, каждое в
--- своём SetPoint.
---
--- Теперь они здесь, и выведены одно из другого:
---   * третья строка стоит НА РЯДУ КНОПОК, по их середине, а не над ними;
---   * ряд кнопок стоит от нижнего края;
---   * первая и вторая строки идут сверху вниз цепочкой.
--- Между второй и третьей строками остаётся зазор, и он проверяется:
--- Tests/test_nonsense.lua считает прямоугольники всех трёх строк по их
--- привязкам - так же, как их считает клиент, - и требует, чтобы ни одна пара
--- не пересекалась.
-Card.PAD = 11                -- отступ слева, он же у иконки
-Card.ICON = 34               -- сторона иконки
+-- Все отступы названы здесь и выведены одно из другого: когда они были вписаны
+-- по месту, строки карточки налезали друг на друга на несколько пикселей, и ни
+-- одна проверка этого не видела. Tests/test_nonsense.lua считает прямоугольники
+-- по привязкам - так же, как их считает клиент, - и требует, чтобы они лежали
+-- внутри строки и не пересекались.
+Card.PAD = 12                -- отступ слева, он же у иконки
+Card.ICON = 22               -- сторона иконки
 Card.TEXT_LEFT = Card.PAD + Card.ICON + 10   -- где начинается текст
-Card.LINE_H = 12             -- высота строки мелкого шрифта
-Card.BUTTON_H = 20
-Card.BUTTON_BOTTOM = 9       -- ряд кнопок от нижнего края карточки
--- Третья строка по середине ряда кнопок: так она читается как часть этого
--- ряда, а не как ещё одна строка текста, которой некуда встать.
-Card.ROW3_BOTTOM = Card.BUTTON_BOTTOM + (Card.BUTTON_H - Card.LINE_H) / 2
-Card.TEXT_RIGHT = 12        -- от правого края карточки до текста и до кнопок
-Card.GAP = 8                -- между текстом и тем, что стоит справа от него
+Card.LINE_H = 15             -- высота строки выгоды
+Card.TITLE_H = 16            -- высота строки заголовка
+Card.TITLE_TOP = (Card.HEIGHT - Card.TITLE_H) / 2   -- заголовок по середине строки
+Card.TEXT_RIGHT = 12         -- от правого края строки до текста
+Card.GAP = 12                -- между заголовком и выгодой
+-- ЗАГОЛОВОК ВАЖНЕЕ ВЫГОДЫ. Когда вместе они не помещаются, выгоде остаётся
+-- эта доля строки - и всё, что не занял заголовок. Не поместилась и так -
+-- выгода, начатая с числа, укорачивается с хвоста («+8% ко всем …»), а
+-- начатая со слов убирается из строки совсем: обрывок «… 3 предмета лагеря»
+-- ничего не сообщает, а полная выгода стоит в карточке совета справа.
+Card.BENEFIT_SHARE = 0.30
+
+-- В СПИСКЕ ЗАГОЛОВОК СТОИТ БЕЗ СЛОВА, КОТОРОЕ УЖЕ СКАЗАНО ЗАГОЛОВКОМ РАЗДЕЛА.
+-- Советы собраны по видам, и над каждой группой написано, что это за вид:
+-- «Скрафтить и надеть», «Купить материалы». Повторять то же в каждой строке -
+-- «Скрафтить: …», «Скрафтить: …» - значит отнимать место у названия вещи, и в
+-- узкой колонке от него оставалось «Скрафтить: Зеленые …». Полный заголовок
+-- стоит в карточке совета справа.
+Card.LIST_PREFIX = {
+    CRAFT_GEAR   = "Скрафтить: ",
+    EQUIP        = "Надеть: ",
+    CRAFT_PROFIT = "На продажу: ",
+    CRAFT_SKILL  = "На навык: ",
+    BUY          = "Купить: ",
+    ARBITRAGE    = "Купить и перепродать: ",
+    DISENCHANT   = "Распылить: ",
+    RESELL       = "Перекупить: ",
+    PATHS        = "Как получить: ",
+    FAVOR        = "За Благосклонность: ",
+}
+
+function Card.ListTitle(card)
+    local title = tostring(card and card.title or "")
+    local prefix = card and Card.LIST_PREFIX[card.kind]
+    if prefix and #title > #prefix and title:sub(1, #prefix) == prefix then
+        return title:sub(#prefix + 1)
+    end
+    return title
+end
 
 Card.pool = {}
 
--- СКОЛЬКО МЕСТА У КАЖДОЙ СТРОКИ - ПО ТЕМ ЖЕ ЧИСЛАМ, ПО КОТОРЫМ СТОЯТ ПРИВЯЗКИ.
+-- Место под текст в строке: от иконки до правого отступа.
+function Card.TextArea(frame)
+    return (tonumber(frame:GetWidth()) or 0) - Card.TEXT_LEFT - Card.TEXT_RIGHT
+end
+
+-- СКОЛЬКО МЕСТА У ЗАГОЛОВКА И У ВЫГОДЫ - ПО ТЕМ ЖЕ ЧИСЛАМ, ПО КОТОРЫМ СТОЯТ
+-- ПРИВЯЗКИ.
 --
--- Строки без переноса, и то, что не влезло, обрезает клиент посреди числа.
--- Чтобы этого не было, ширину надо ЗНАТЬ, а не угадывать: здесь она считается
--- из разметки выше и из того, что сейчас нарисовано справа (кнопка, путь,
--- значок достоверности, полоска готовности). Кто меняет разметку, меняет и
--- это - иначе проверка в Tests/test_nonsense.lua поймает расхождение.
-function Card.RoomFor(frame, card, showAction, canRoute)
-    local full = tonumber(frame:GetWidth()) or 0
-    local left = Card.TEXT_LEFT
+-- Строка без переноса, и то, что не влезло, обрезает клиент посреди числа.
+-- Чтобы этого не было, ширину надо ЗНАТЬ, а не угадывать. Выгода получает свою
+-- долю и то, что заголовку не нужно (frame.benefitRoom считает Card.Fill, когда
+-- меряет заголовок); заголовок - то, что осталось слева от нарисованной выгоды.
+-- Кто меняет разметку, меняет и это - иначе проверка в Tests/test_nonsense.lua
+-- поймает расхождение.
+function Card.RoomFor(frame, card)
+    local area = Card.TextArea(frame)
     local out = {}
-    -- Первая строка: от текста до столбца выгоды.
-    out.title = full - left - (tonumber(frame.benefit:GetStringWidth()) or 0)
-        - Card.GAP - Card.TEXT_RIGHT
-    -- Вторая строка: до правого края карточки.
-    out.why = full - left - Card.TEXT_RIGHT
-    -- Третья строка: до того, что стоит справа.
-    local right = Card.TEXT_RIGHT
-    if showAction then right = right + (tonumber(frame.action:GetWidth()) or 0) end
-    if canRoute then right = right + (tonumber(frame.route:GetWidth()) or 0) + 6 end
-    right = right + (tonumber(frame.badge:GetWidth()) or 0) + Card.GAP
-    if card.plan then right = right + (tonumber(frame.meter:GetWidth()) or 0) + Card.GAP end
-    out.need = full - left - right - Card.GAP
+    out.benefit = frame.benefitRoom or math.floor(area * Card.BENEFIT_SHARE)
+    local drawn = tonumber(frame.benefit:GetStringWidth()) or 0
+    -- Выгоды в строке нет - заголовку вся строка.
+    out.title = (drawn > 0) and (area - drawn - Card.GAP) or area
     return out
+end
+
+-- КАРТОЧКА СОВЕТА: ЧТО ИЗ НЕГО ПОКАЗАТЬ И В КАКОМ ВИДЕ -------------------------
+--
+-- Игрок сказал прямо, что ему нужно (2026-11-21): «Мне не нужно знать, откуда
+-- ты брал эти данные. Мне нужно знать, что за данные, где купить что-то, где
+-- что-то продать». Поэтому карточка справа от списка собирается не из длинного
+-- текста совета, а из его чисел:
+--
+--   lead   - одна-две фразы: в чём совет (текст движка без оговорок, U.essence);
+--   rows   - строки «подпись - значение»: что даёт, что теряете, цена, где;
+--   blocks - что купить и где: по строке на предмет, цена справа, предметы
+--            собраны по месту покупки («На аукционе», «У торговца»);
+--   need   - что ещё надо сделать или чего не хватает.
+--
+-- ВСЕ ЧИСЛА - ИЗ ТЕХ ЖЕ ПОЛЕЙ СОВЕТА, ИЗ КОТОРЫХ ДВИЖОК СОБРАЛ СВОЙ ТЕКСТ.
+-- Здесь ничего не пересчитывается и не додумывается: нет поля - нет строки.
+-- У видов совета, для которых полей нет, карточка показывает текст движка.
+Card.SHOP_CAPTION = {
+    auctionator = "Купить на аукционе",
+    vendor = "Купить у торговца",
+}
+Card.SHOP_CAPTION_OTHER = "Купить"
+Card.SHOP_ORDER = { "vendor", "auctionator" }
+Card.RISK_WORD = { HIGH = "высокий" }
+
+local function itemName(itemID)
+    return (ns.ActionEngine and ns.ActionEngine.nameOf and ns.ActionEngine.nameOf(itemID))
+        or U.itemFallbackName(itemID)
+end
+
+local function moneyOr(copper)
+    if tonumber(copper) then return U.money(copper) end
+    return U.void(ns.VOID.NO_PRICE)
+end
+
+-- Что купить по плану - блоками по месту покупки.
+function Card.ShopBlocks(plan)
+    local out = {}
+    if type(plan) ~= "table" or plan.ready then return out end
+    local bySrc, other = {}, {}
+    for _, line in ipairs(plan.shopping or {}) do
+        local entry = {
+            variants = Card.NameQty(itemName(line.itemID), line.qty),
+            right = moneyOr(line.subtotal or (line.unit and line.unit * (line.qty or 1))),
+        }
+        if Card.SHOP_CAPTION[line.src] then
+            bySrc[line.src] = bySrc[line.src] or {}
+            table.insert(bySrc[line.src], entry)
+        else
+            other[#other + 1] = entry
+        end
+    end
+    for _, src in ipairs(Card.SHOP_ORDER) do
+        if bySrc[src] then
+            out[#out + 1] = { caption = Card.SHOP_CAPTION[src], lines = bySrc[src] }
+        end
+    end
+    if #other > 0 then
+        out[#out + 1] = { caption = Card.SHOP_CAPTION_OTHER, lines = other }
+    end
+    return out
+end
+
+-- Где это: зона и координаты, без имени (имя стоит в соседней строке).
+local function whereText(place)
+    if type(place) ~= "table" then return nil end
+    local bits = {}
+    if place.zone then bits[#bits + 1] = tostring(place.zone) end
+    if place.x and place.y then
+        bits[#bits + 1] = string.format("%.1f %.1f", place.x * 100, place.y * 100)
+    end
+    if #bits == 0 then return nil end
+    return table.concat(bits, ", ")
+end
+
+-- СОМНЕНИЕ В ЧИСЛАХ СОВЕТА - ОТДЕЛЬНО И ПЕРВЫМ.
+--
+-- Когда числа совета не сходятся или держатся на одной странной цене, движок
+-- ставит предупреждение первой фразой текста «почему» (Logic/Risk.lua,
+-- RenderDoubts) и помнит текст без него (card.whyBase). Карточка берёт
+-- предупреждение целиком - оно про деньги игрока, - а остальное сокращает.
+function Card.DoubtText(card)
+    if type(card) ~= "table" or type(card.doubts) ~= "table" or #card.doubts == 0 then
+        return ""
+    end
+    local why, base = tostring(card.why or ""), tostring(card.whyBase or "")
+    if base == "" then return U.dropProvenance(why) end
+    if #why > #base and why:sub(-#base) == base then
+        return U.dropProvenance((why:sub(1, #why - #base):gsub("%s+$", "")))
+    end
+    return ""
+end
+
+-- Название с количеством, от полного к короткому: уходят слова с конца
+-- названия, количество остаётся. «Рулон магической ткани x12» ->
+-- «Рулон магической … x12» -> «Рулон … x12».
+function Card.NameQty(name, qty)
+    name = tostring(name or "?")
+    local tail = " x" .. tostring(qty or 1)
+    local out = { name .. tail }
+    local words = {}
+    for word in name:gmatch("%S+") do words[#words + 1] = word end
+    for k = #words - 1, 1, -1 do
+        out[#out + 1] = table.concat(words, " ", 1, k) .. " " .. U.MORE_MARK .. tail
+    end
+    return out
+end
+
+local SHEET = {}
+
+-- Вещь, которую делают, чтобы надеть: что прибавится, что убавится, во что
+-- обойдутся материалы.
+SHEET[ns.KIND.CRAFT_GEAR] = function(card, sheet)
+    local cmp = card.compareDetail
+    if type(cmp) == "table" then
+        if type(cmp.gainText) == "string" and cmp.gainText ~= "" then
+            sheet.rows[#sheet.rows + 1] = { label = "Даёт", value = cmp.gainText }
+        end
+        if type(cmp.lossText) == "string" and cmp.lossText ~= "" then
+            sheet.rows[#sheet.rows + 1] = { label = "Теряете", value = cmp.lossText, tone = "warn" }
+        end
+    end
+    sheet.leadLimit = 1
+end
+
+-- Вещь на продажу: где и за сколько уйдёт, и ниже какой цены не выставлять.
+SHEET[ns.KIND.CRAFT_PROFIT] = function(card, sheet)
+    if tonumber(card.revenue) then
+        local origin = card.revOrigin
+        if type(origin) ~= "table" then
+            origin = type(card.batch) == "table" and card.batch.origin or nil
+        end
+        local where
+        if type(origin) == "table" then
+            if origin.src == "vendor" then
+                where = "торговцу"
+            elseif origin.cutApplied or origin.market then
+                where = "на аукционе"
+            end
+        end
+        sheet.rows[#sheet.rows + 1] = { label = "Продать",
+            value = (where and (where .. " — ") or "")
+                .. U.money(card.revenue) .. " за штуку" }
+    end
+    local be = card.breakeven
+    if type(be) == "table" and tonumber(be.listPrice) then
+        sheet.rows[#sheet.rows + 1] = { label = "Не дешевле",
+            value = U.money(be.listPrice) .. " — иначе в минус" }
+    end
+    sheet.leadLimit = (#sheet.rows > 0) and 0 or 2
+end
+
+-- Купить у торговца и продать на аукционе: у кого, где он стоит, за сколько.
+SHEET[ns.KIND.ARBITRAGE] = function(card, sheet)
+    local arb = card.arbitrage
+    if type(arb) ~= "table" then return end
+    local who = (type(arb.npcName) == "string" and arb.npcName ~= "") and arb.npcName or nil
+    sheet.rows[#sheet.rows + 1] = { label = "Купить",
+        value = (who and ("у торговца " .. who) or "у торговца")
+            .. (tonumber(arb.ask) and (" — " .. U.money(arb.ask)) or "") }
+    local where = whereText(card.place or arb.place)
+    if where then sheet.rows[#sheet.rows + 1] = { label = "Где", value = where } end
+    if tonumber(card.revenue) then
+        sheet.rows[#sheet.rows + 1] = { label = "Продать",
+            value = "на аукционе — " .. U.money(card.revenue) }
+    end
+    sheet.leadLimit = 0
+    -- Кто и где - уже в строках; фраза «Торговец: имя, зона, координаты» под
+    -- ними была бы повтором.
+    sheet.dropNeed = (who ~= nil and where ~= nil)
+    sheet.hideNeed = (who ~= nil)
+end
+
+-- Материал под другие советы: почём, где и для чего.
+SHEET[ns.KIND.BUY] = function(card, sheet)
+    local price = card.matPrice
+    if type(price) == "table" and tonumber(price.unit) then
+        sheet.rows[#sheet.rows + 1] = { label = "Цена",
+            value = U.money(price.unit) .. " за штуку" }
+        local where = (price.src == "vendor") and "у торговца"
+            or ((price.src == "auctionator") and "на аукционе" or nil)
+        local place = type(card.place) == "table" and ns.Places:Describe(card.place) or nil
+        if where and place then where = where .. ": " .. place end
+        if where then sheet.rows[#sheet.rows + 1] = { label = "Где", value = where } end
+    end
+    if type(card.buyFor) == "table" then
+        -- Названия вещей, без слова «Скрафтить:» или «На продажу:» впереди: в
+        -- узкой колонке оно занимало строку на каждую вещь.
+        local titles = {}
+        for _, title in pairs(card.buyFor) do
+            title = tostring(title)
+            for _, prefix in pairs(Card.LIST_PREFIX) do
+                if #title > #prefix and title:sub(1, #prefix) == prefix then
+                    title = title:sub(#prefix + 1)
+                    break
+                end
+            end
+            titles[#titles + 1] = title
+        end
+        table.sort(titles)
+        if #titles > 0 then
+            local shown = {}
+            for i = 1, math.min(3, #titles) do shown[i] = titles[i] end
+            local value = table.concat(shown, "\n")
+            if #titles > 3 then
+                value = value .. "\n" .. "и ещё " .. (#titles - 3)
+            end
+            sheet.rows[#sheet.rows + 1] = { label = "Для чего", value = value }
+        end
+    end
+    sheet.leadLimit = (#sheet.rows >= 2) and 0 or 2
+end
+
+-- Развилка: одна вещь, несколько способов её получить.
+SHEET[ns.KIND.PATHS] = function(card, sheet)
+    local fork = card.paths
+    if type(fork) ~= "table" then return end
+    if fork.slotLabel then
+        sheet.rows[#sheet.rows + 1] = { label = "Слот", value = tostring(fork.slotLabel) }
+    end
+    if type(fork.baseline) == "table" and fork.baseline.label then
+        sheet.rows[#sheet.rows + 1] = { label = "Вместо", value = tostring(fork.baseline.label) }
+    end
+    local opt = type(fork.options) == "table" and fork.options[1] or nil
+    if type(opt) == "table" and type(opt.paths) == "table" and #opt.paths > 0 then
+        local lines = {}
+        for _, path in ipairs(opt.paths) do
+            local right
+            if path.cost == 0 then
+                right = "бесплатно"
+            else
+                right = moneyOr(path.cost)
+            end
+            local label = U.capitalize(tostring(path.label or "?"))
+            local variants = { label }
+            if path.when then
+                table.insert(variants, 1, label .. " · " .. tostring(path.when))
+            end
+            lines[#lines + 1] = { variants = variants, right = right }
+        end
+        sheet.blocks[#sheet.blocks + 1] = { caption = "Как получить", lines = lines }
+        local choice = ns.UpgradePaths and ns.UpgradePaths:ChoiceText(opt)
+        if choice then
+            sheet.lead = U.essence(choice, 1)
+            sheet.leadLimit = nil
+        end
+    end
+    sheet.hideNeed = true
+end
+
+-- Справка про цену: сколько сейчас и сколько обычно.
+SHEET[ns.KIND.PRICE_INFO] = function(card, sheet)
+    local v = card.priceVerdict
+    if type(v) ~= "table" then return end
+    if tonumber(v.live) then
+        sheet.rows[#sheet.rows + 1] = { label = "Сейчас", value = U.money(v.live) }
+    end
+    if tonumber(v.median) then
+        sheet.rows[#sheet.rows + 1] = { label = "Обычно", value = U.money(v.median) }
+    end
+    sheet.leadLimit = (#sheet.rows == 2) and 0 or 2
+end
+
+-- Состояние чар: сколько слотов зачаровано и какие пустые.
+SHEET[ns.KIND.ENCHANT] = function(card, sheet)
+    local st = card.enchantStatus
+    if type(st) ~= "table" then return end
+    if tonumber(st.enchanted) and tonumber(st.enchantable) then
+        sheet.rows[#sheet.rows + 1] = { label = "Зачаровано",
+            value = st.enchanted .. " из " .. st.enchantable }
+    end
+    if type(st.bareLabels) == "table" and #st.bareLabels > 0 then
+        sheet.rows[#sheet.rows + 1] = { label = "Без чар",
+            value = table.concat(st.bareLabels, ", ") }
+    end
+    sheet.leadLimit = (#sheet.rows == 2) and 0 or 2
+end
+
+function Card.Sheet(card)
+    local sheet = { rows = {}, blocks = {}, warn = "", lead = "", need = "", leadLimit = 2 }
+    if type(card) ~= "table" then return sheet end
+
+    local build = SHEET[card.kind]
+    if build then build(card, sheet) end
+
+    -- У совета с планом крафта - цена материалов и что докупить.
+    local plan = card.plan
+    local planCovers = false
+    if type(plan) == "table" then
+        if plan.ready then
+            planCovers = not (plan.needsTrip or plan.cooldown)
+        else
+            if tonumber(plan.cost) and plan.cost > 0 then
+                sheet.rows[#sheet.rows + 1] = { label = "Материалы", value = U.money(plan.cost) }
+            elseif tonumber(plan.costPartial) and plan.costPartial > 0 then
+                sheet.rows[#sheet.rows + 1] = { label = "Материалы",
+                    value = "от " .. U.money(plan.costPartial) }
+            end
+            for _, block in ipairs(Card.ShopBlocks(plan)) do
+                sheet.blocks[#sheet.blocks + 1] = block
+                planCovers = true
+            end
+        end
+    end
+
+    -- Второй вариант с той же вещью: надеть или продать.
+    if type(card.alsoSell) == "table" and card.alsoSell.benefit then
+        sheet.rows[#sheet.rows + 1] = { label = "Или продать",
+            value = "прибыль " .. tostring(card.alsoSell.benefit) }
+    end
+
+    -- Высокий риск называется строкой: это про деньги игрока.
+    local risk = card.risk
+    if type(risk) == "table" and Card.RISK_WORD[risk.level]
+        and (card.benefitKind == "gold" or card.benefitKind == "spend") then
+        local value = Card.RISK_WORD[risk.level]
+        if tonumber(risk.maxLoss) and risk.maxLoss > 0 then
+            value = value .. " — потерять можно до " .. U.money(risk.maxLoss)
+        end
+        sheet.rows[#sheet.rows + 1] = { label = "Риск", value = value, tone = "warn" }
+    end
+
+    -- Текст: сначала сомнение (если есть), потом суть совета без оговорок.
+    -- При leadLimit = 0 от текста остаются только настоящие предупреждения
+    -- (U.essence их не выбрасывает): всё остальное уже сказано строками.
+    sheet.warn = Card.DoubtText(card)
+    local why = card.whyBase
+    if type(why) ~= "string" or sheet.warn == "" then why = card.why end
+    if sheet.leadLimit then
+        sheet.lead = U.essence(why, sheet.leadLimit)
+        -- Строк не вышло вовсе - текст совета идёт как есть, двумя фразами.
+        if sheet.lead == "" and #sheet.rows == 0 and #sheet.blocks == 0 then
+            sheet.lead = U.essence(why, 2)
+        end
+    end
+    -- Что ещё сделать. Когда это уже сказано строками или блоком покупок, от
+    -- текста остаются только настоящие предупреждения и координаты (их
+    -- U.essence не выбрасывает ни при каком сокращении).
+    if sheet.dropNeed then
+        sheet.need = ""
+    elseif sheet.hideNeed or planCovers then
+        sheet.need = U.essence(card.need, 0)
+    else
+        sheet.need = U.essence(card.need, 2)
+    end
+    return sheet
+end
+
+-- Подсказка строки списка: только то, что в строке не поместилось.
+--
+-- Раньше под курсором стоял весь совет ещё раз - почему, чего не хватает,
+-- материалы, достоверность, место в списке. Всё это теперь в карточке справа,
+-- а подсказка предмета показывает сам предмет, как в игре.
+--   cut - что в строке было укорочено (frame.cut)
+function Card.TipLines(card, cut)
+    local extra = {}
+    if not card then return extra end
+    cut = cut or {}
+    if cut.title and card.title then extra[#extra + 1] = card.title end
+    if cut.benefit and card.benefit then extra[#extra + 1] = card.benefit end
+    return extra
 end
 
 local function onCardEnter(self)
     self.hover:Show()
     local card = self.card
     if not card then return end
-    local extra = {}
-    -- ПОЛНЫЙ ТЕКСТ ТОГО, ЧТО НЕ ВЛЕЗЛО В СТРОКУ.
-    --
-    -- Строки карточки укорачиваются по ширине окна (W.SetFitted) и помечаются
-    -- «…». Подсказка - то место, где ширина не мешает, поэтому здесь стоит
-    -- ровно то, что было укорочено, и целиком. Не укорочено - не повторяем:
-    -- второй раз та же фраза ничего не сообщает.
-    local cut = self.cut or {}
-    if cut.title and card.title then extra[#extra + 1] = card.title end
-    if cut.why and card.why then extra[#extra + 1] = card.why end
-    if cut.need and card.need then extra[#extra + 1] = card.need end
-    if card.plan then
-        local plan = card.plan
-        if plan.cost == 0 then
-            -- Ноль - это не цена: «Материалы: 0м» читалось как «стоят ноль».
-            table.insert(extra, "Материалы: всё уже есть")
-        elseif plan.cost then
-            table.insert(extra, "Материалы: " .. U.money(plan.cost))
-        elseif plan.costPartial and plan.costPartial > 0 then
-            table.insert(extra, "Материалы: от " .. U.money(plan.costPartial)
-                .. " (часть цен неизвестна)")
-        end
-        if #plan.crafts > 1 then
-            table.insert(extra, "Шагов крафта: " .. #plan.crafts)
-            for i = 1, math.min(5, #plan.crafts) do
-                local step = plan.crafts[i]
-                table.insert(extra, "  " .. i .. ". " .. (step.recipe.name or "?")
-                    .. " x" .. step.times)
-            end
-        end
-        if plan.needsTrip then
-            table.insert(extra, "Часть материалов в банке или у других персонажей")
-        end
-        if plan.hasCycle then
-            table.insert(extra, "В цепочке есть циклическая зависимость — я её разорвал")
-        end
-        for _, line in ipairs(plan.shopping or {}) do
-            local name = ns.ActionEngine.nameOf(line.itemID)
-            local price = line.unit and U.money(line.unit * line.qty) or U.void(ns.VOID.NO_PRICE)
-            table.insert(extra, "Нужно: " .. name .. " x" .. line.qty .. " — " .. price)
-        end
-    end
-    -- ВТОРОЙ ВАРИАНТ С ТОЙ ЖЕ ВЕЩЬЮ. Надеть и продать - взаимоисключающие
-    -- действия, и раньше про них было две спорящих карточки (см.
-    -- Engine:FoldSellIntoGear). Теперь карточка одна, и подсказка называет
-    -- второй вариант числом: в строке «почему» он есть, но она на экране
-    -- обрезается шириной окна, а подсказка - нет.
-    if card.alsoSell then
-        table.insert(extra, "Или продать, а не надевать: прибыль "
-            .. tostring(card.alsoSell.benefit)
-            .. (card.alsoSell.revenue
-                and (", выручка " .. U.money(card.alsoSell.revenue)) or ""))
-    end
-    -- ГДЕ ИСКАТЬ РЕЦЕПТ - ОДНОЙ СТРОКОЙ, ЗДЕСЬ ЖЕ.
-    --
-    -- Длинного объяснения (Card.ActionNote: «Окно профессий я не открываю:
-    -- игра это аддонам запрещает…») в подсказке нет и быть не должно: такое
-    -- объяснение занимало здесь пять строк поверх игровых данных о предмете -
-    -- то есть поверх того, за чем игрок на подсказку и смотрел, - и
-    -- повторялось на каждом совете, которого касалась мышь.
-    --
-    -- Но и над списком оно больше не висит: там теперь одна короткая строка про
-    -- то, что часть советов не показана (UI/TabNow.lua). Вопрос «а где кнопка?»
-    -- возникает у конкретного совета, поэтому ответ стоит у него же и ровно
-    -- одной строкой - Card.ActionNoteShort. Полный текст - в подробностях над
-    -- списком и в подсказке панели.
-    local short = Card.ActionNoteShort(card)
-    if short then table.insert(extra, short) end
-    -- И то, что относится к делу один раз: где это поправить, чем проверить.
-    -- В строке совета такой подсказке места нет - она занимает место совета.
-    if type(card.tipNote) == "string" and card.tipNote ~= "" then
-        table.insert(extra, card.tipNote)
-    end
-    local placeTip = card.place and ns.Places:CardTip(card.place)
-    if placeTip then table.insert(extra, placeTip) end
-    table.insert(extra, "Достоверность: " .. (ns.CONF_LABEL[card.conf] or "?"))
-    -- ОТКУДА ЧИСЛА - РЯДОМ С ДОСТОВЕРНОСТЬЮ, А НЕ В СТРОКЕ «ПОЧЕМУ».
-    --
-    -- Адрес сайта, дата его чтения и то, с чем сверены номера, - это ответ на
-    -- вопрос «а проверить можно?», и задаёт его тот, кто уже наводит мышь.
-    -- В строке «почему» на экране это сто с лишним символов, из-за которых
-    -- сам совет не виден (см. Logic/Favor.lua, CaveatText).
-    if type(card.sourceNote) == "string" and card.sourceNote ~= "" then
-        table.insert(extra, card.sourceNote)
-    end
-    -- МЕСТО В СПИСКЕ, А НЕ БАЛЛ. Здесь стояло «Приоритет: 0.46 (профиль
-    -- «Сила»)»: число без шкалы - много это или мало, игроку понять нечем. То,
-    -- что он за ним хотел бы узнать, - какой этот совет по счёту и что решает
-    -- порядок. Это и сказано. Сам балл остаётся в файле диагностики.
-    local position, total = nil, 0
-    for i, other in ipairs((ns.ActionEngine and ns.ActionEngine.cards) or {}) do
-        total = i
-        if other == card or (other.key ~= nil and other.key == card.key) then
-            position = position or i
-        end
-    end
-    if position then
-        table.insert(extra, "Место в общем списке: " .. position .. " из " .. total
-            .. " (порядок задаёт профиль «"
-            .. (ns.PROFILE_LABEL[ns.Config:Profile()] or "?") .. "»)")
-    end
-
+    local extra = Card.TipLines(card, self.cut)
     if card.link then
         W.ShowItemTip(self, card.link, extra)
-    else
-        W.ShowTip(self, card.title, extra)
+    elseif #extra > 0 then
+        W.ShowTip(self, extra[1], { extra[2] })
     end
 end
 
@@ -209,90 +488,71 @@ function Card.Acquire(parent, index)
         return frame
     end
 
+    local T = W.THEME
     frame = CreateFrame("Button", nil, parent)
     frame:SetHeight(Card.HEIGHT)
-    W.Backdrop(frame, 0.08, 0.08, 0.10, 0.80, 0.08)
+
+    -- Фон: строка лежит прямо на списке, без коробки. Заливка появляется
+    -- только у выбранной строки и у закреплённого сверху совета.
+    local bg = frame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(frame)
+    bg:SetColorTexture(1, 1, 1, 0)
+    frame.fpBG = bg
 
     local hover = frame:CreateTexture(nil, "BORDER")
     hover:SetAllPoints(frame)
-    local hc = W.COLOR.rowHover
-    hover:SetColorTexture(hc[1], hc[2], hc[3], hc[4])
+    W.Paint(hover, T.hover)
     hover:Hide()
     frame.hover = hover
 
-    -- A coloured spine on the left tells the kind apart at a glance.
+    -- Цвет вида совета - узкой полоской слева.
     local spine = frame:CreateTexture(nil, "ARTWORK")
-    spine:SetPoint("TOPLEFT", 0, 0)
-    spine:SetPoint("BOTTOMLEFT", 0, 0)
-    spine:SetWidth(3)
+    spine:SetPoint("TOPLEFT", 0, -5)
+    spine:SetPoint("BOTTOMLEFT", 0, 5)
+    spine:SetWidth(2)
     frame.spine = spine
+
+    -- У выбранной строки вместо неё - золотая полоска во всю высоту.
+    local bar = frame:CreateTexture(nil, "ARTWORK")
+    bar:SetPoint("TOPLEFT", 0, 0)
+    bar:SetPoint("BOTTOMLEFT", 0, 0)
+    bar:SetWidth(3)
+    W.Paint(bar, T.accent, 1)
+    bar:Hide()
+    frame.bar = bar
 
     local icon = frame:CreateTexture(nil, "ARTWORK")
     icon:SetSize(Card.ICON, Card.ICON)
-    icon:SetPoint("TOPLEFT", Card.PAD, -9)
+    icon:SetPoint("TOPLEFT", frame, "TOPLEFT", Card.PAD, -(Card.HEIGHT - Card.ICON) / 2)
     icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
     frame.icon = icon
 
-    -- Line 1: title left, payoff right.
-    frame.benefit = W.Label(frame, "", W.FONT_NORMAL)
-    frame.benefit:SetPoint("TOPRIGHT", -12, -9)
+    frame.benefit = W.Label(frame, "", W.FONT_SMALL)
+    frame.benefit:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -Card.TEXT_RIGHT,
+        -math.floor((Card.HEIGHT - Card.LINE_H) / 2))
     frame.benefit:SetJustifyH("RIGHT")
+    frame.benefit:SetWordWrap(false)
+    frame.benefit:SetHeight(Card.LINE_H)
 
-    frame.title = W.Label(frame, "", W.FONT_NORMAL, 1, 1, 1)
-    frame.title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, 1)
-    frame.title:SetPoint("RIGHT", frame.benefit, "LEFT", -8, 0)
+    frame.title = W.Label(frame, "", W.FONT_NORMAL, T.text[1], T.text[2], T.text[3])
+    frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", Card.TEXT_LEFT, -Card.TITLE_TOP)
+    frame.title:SetPoint("RIGHT", frame.benefit, "LEFT", -Card.GAP, 0)
     frame.title:SetJustifyH("LEFT")
     frame.title:SetWordWrap(false)
-
-    -- Line 2: why.
-    frame.why = W.Label(frame, "", W.FONT_SMALL, 0.72, 0.72, 0.72)
-    frame.why:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -3)
-    frame.why:SetPoint("RIGHT", frame, "RIGHT", -12, 0)
-    frame.why:SetJustifyH("LEFT")
-    frame.why:SetWordWrap(false)
-    frame.why:SetHeight(Card.LINE_H)
-
-    -- Line 3: what is missing, plus the button and the badges on the right.
-    frame.action = W.Button(frame, "", 128, Card.BUTTON_H)
-    frame.action:SetPoint("BOTTOMRIGHT", -12, Card.BUTTON_BOTTOM)
-
-    -- The route button. Only shown when there is somewhere to go AND something
-    -- to draw the arrow with; otherwise the place goes in the text instead.
-    frame.route = W.Button(frame, "Показать путь", 110, 20)
-    frame.route:SetPoint("RIGHT", frame.action, "LEFT", -6, 0)
-    frame.route:Hide()
-
-    frame.badge = W.ConfBadge(frame, ns.CONF.UNKNOWN)
-    frame.badge:SetPoint("RIGHT", frame.route, "LEFT", -8, 0)
-
-    frame.meter = W.Meter(frame, 44, 4)
-    frame.meter:SetPoint("RIGHT", frame.badge, "LEFT", -8, 0)
-
-    -- ТРЕТЬЯ СТРОКА - ОТ НИЖНЕГО КРАЯ, А НЕ ОТ ИКОНКИ.
-    --
-    -- Здесь стояло `SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, -1)`, то
-    -- есть строка висела на иконке и ехала вверх, навстречу строке «почему».
-    -- Так они и столкнулись (см. разметку в начале файла). Обе привязки ниже
-    -- дают одну и ту же высоту - середину ряда кнопок, - поэтому спорить между
-    -- собой они не могут.
-    frame.need = W.Label(frame, "", W.FONT_SMALL, 0.85, 0.72, 0.45)
-    frame.need:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", Card.TEXT_LEFT, Card.ROW3_BOTTOM)
-    frame.need:SetPoint("RIGHT", frame.meter, "LEFT", -8, 0)
-    frame.need:SetJustifyH("LEFT")
-    frame.need:SetWordWrap(false)
-    frame.need:SetHeight(Card.LINE_H)
+    frame.title:SetHeight(Card.TITLE_H)
 
     frame:SetScript("OnEnter", onCardEnter)
     frame:SetScript("OnLeave", onCardLeave)
     frame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     frame:SetScript("OnClick", function(self, button)
         if button == "RightButton" then
-            -- Two deliberate clicks, not one stray one. See Card.RequestDismiss.
             Card.RequestDismiss(self.card)
         else
-            -- Any left-click is "I meant something else", so it disarms.
+            -- ЛЕВЫЙ ЩЕЛЧОК ВЫБИРАЕТ, А НЕ ВЫПОЛНЯЕТ. Действие - на золотой
+            -- кнопке в карточке справа: так по списку можно ходить, ничего
+            -- не запуская, и всегда видно, что именно будет нажато.
             Card.Disarm()
-            Card.Activate(self.card)
+            Card.Pick(self.card)
         end
     end)
 
@@ -325,12 +585,79 @@ end
 -- дефект, что текст про кнопку, которой нет. Поэтому её нет вовсе, а на
 -- экране стоит то, что игроку и нужно: какую профессию открыть и что в ней
 -- найти (в подсказке совета, над списком и в подсказке панели).
+--
+-- С 2026-11-21 У РЕЦЕПТА КНОПКА БЫВАЕТ, И У ЛЮБОГО СОВЕТА ОНА ЗАВИСИТ ОТ ТОГО,
+-- ЧТО СЕЙЧАС ОТКРЫТО. Жалоба игрока: «я просто на это смотрю и должен ручками
+-- вбивать название в профессии… или искать на аукционе кнопочку вставить».
+-- Что нажимается на совете прямо сейчас, решает одна функция - Card.LiveAction,
+-- - и по ней же ставится подпись, и по ней же идёт нажатие: иначе кнопка
+-- подписана одним, а делает другое.
+--   * открыт аукцион и совету есть что на нём искать (сам предмет или
+--     материалы, которых не хватает) - «Искать на аукционе»;
+--   * совет про рецепт и клиент умеет искать по имени в окне профессии -
+--     «Показать в профессии» (окно при этом открывает игрок);
+--   * иначе - своё действие совета, как раньше.
+-- nil - нажимать нечего, и кнопки нет.
+function Card.LiveAction(card)
+    local act = card and card.action
+    if not act or act.kind == "noop" then return nil end
+
+    if ns.ShoppingList and ns.ShoppingList.CanSearchNow
+        and (act.kind == "shop" or act.kind == "findRecipe")
+        and ns.ShoppingList:CanSearchNow() then
+        local items = ns.ShoppingList:CardAuctionItems(card)
+        if #items > 0 then
+            return { kind = "auction", label = ns.ShoppingList.HANDOFF_LABEL, items = items }
+        end
+    end
+
+    if act.kind == "findRecipe" then
+        local info = ns.RecipeBook:ShowState(act.recipeID)
+        if info.state == "ready" then
+            return { kind = "showRecipe", label = info.label, recipeID = act.recipeID,
+                     shown = info.shown, armed = info.armed }
+        end
+        return nil
+    end
+    return { kind = act.kind, label = act.label or "Открыть" }
+end
+
 function Card.ActionReady(card)
     local act = card and card.action
     if not act then return true end
-    if act.kind == "noop" then return false end
-    if act.kind == "findRecipe" then return ns.RecipeBook:CanShow() end
-    return true
+    return Card.LiveAction(card) ~= nil
+end
+
+-- Подпись кнопки - та, что сейчас нажимается.
+function Card.ActionLabel(card)
+    local live = Card.LiveAction(card)
+    if live and live.label then return live.label end
+    return (card and card.action and card.action.label) or "Открыть"
+end
+
+-- Подсказка кнопки: что она сделает и чего не сделает. nil - сказать нечего.
+function Card.ActionTip(card)
+    local live = Card.LiveAction(card)
+    if not live then return nil end
+    if live.kind == "auction" then
+        return live.label, {
+            "Открою вкладку покупок Auctionator и запущу в ней поиск: "
+                .. #live.items .. " "
+                .. U.plural(#live.items, "позиция", "позиции", "позиций") .. ".",
+            "Ничего не покупаю — дальше действуете вы.",
+        }
+    end
+    if live.kind == "showRecipe" then
+        if live.shown then
+            return live.label, { "Сниму поиск в окне профессии — вернётся весь список." }
+        end
+        return live.label, {
+            "Профессия открыта — оставлю в её списке только этот рецепт.",
+            "Закрыта — запомню: откройте её сами, и рецепт уже будет найден.",
+            "Окон игры я не открываю и ничего не создаю.",
+        }
+    end
+    return nil
 end
 
 -- Почему у совета нет кнопки. nil - кнопка есть или объяснять нечего.
@@ -347,7 +674,10 @@ function Card.ActionNote(card)
     end
     local act = card and card.action
     if act and act.kind == "findRecipe" then
-        local info = ns.RecipeBook:ShowState()
+        -- Кнопка есть (показ в профессии или поиск на аукционе) - объяснять
+        -- её отсутствие незачем.
+        if Card.LiveAction(card) then return nil end
+        local info = ns.RecipeBook:ShowState(act.recipeID)
         if info.state ~= "ready" then return info.note end
     end
     return nil
@@ -370,7 +700,8 @@ end
 function Card.ActionNoteShort(card)
     local act = card and card.action
     if act and act.kind == "findRecipe" then
-        local info = ns.RecipeBook:ShowState()
+        if Card.LiveAction(card) then return nil end
+        local info = ns.RecipeBook:ShowState(act.recipeID)
         if info.state ~= "ready" then
             return ns.RecipeBook:FindText(act.recipeID) or info.short
         end
@@ -378,97 +709,127 @@ function Card.ActionNoteShort(card)
     return nil
 end
 
-function Card.Fill(frame, card)
+-- ВЫГОДА В УЗКОЙ СТРОКЕ. Когда она начинается с числа («+8% ко всем
+-- характеристикам», «1з 70с за штуку»), ценно начало, и уходят слова с конца:
+-- «+8% ко всем …». Общий сокращатель (U.shortenings) бережёт ПОСЛЕДНЕЕ число
+-- фразы и от такой строки оставлял «… +8% ко» - число цело, а смысла нет.
+-- Числовая группа и здесь не режется: слова уходят целиком (U.atoms), и
+-- предлог в конце не остаётся висеть.
+function Card.FitBenefit(fs, text, room)
+    text = tostring(text or "")
+    room = tonumber(room) or 0
+    local memo = fs.fpBenefit
+    if memo and memo.text == text and memo.room == room then
+        fs:SetText(memo.out)
+        return memo.out, memo.cut
+    end
+    fs:SetText(text)
+    local out, cut = text, false
+    if room >= W.FIT_MIN and (tonumber(fs:GetStringWidth()) or 0) > room then
+        local atoms = U.atoms(text)
+        if atoms[1] and atoms[1].number and #atoms > 1 then
+            local variants = { text }
+            -- Не короче, чем число со своим словом: «+7 …» не говорит, чего семь.
+            for k = #atoms - 1, 2, -1 do
+                local last = atoms[k]
+                if last.number or U.charLen(last.text) > 2 then
+                    local parts = {}
+                    for i = 1, k do parts[i] = atoms[i].text end
+                    variants[#variants + 1] = table.concat(parts, " ") .. " " .. U.MORE_MARK
+                end
+            end
+            out, cut = W.SetFittedFrom(fs, variants, room)
+            -- Не поместился и самый короткий вариант - выгоды в строке нет.
+            if (tonumber(fs:GetStringWidth()) or 0) > room then
+                fs:SetText("")
+                out, cut = "", true
+            end
+        else
+            -- Начата со слов и не поместилась: в строке её нет вовсе.
+            fs:SetText("")
+            out, cut = "", true
+        end
+    end
+    fs.fpBenefit = { text = text, room = room, out = out, cut = cut }
+    return out, cut
+end
+
+-- Кто-то слушает выбор строки (список советов в UI/TabNow.lua).
+Card.OnPick = nil
+
+function Card.Pick(card)
+    if not (card and Card.OnPick) then return end
+    return ns.Diag:Guard("Card.Pick", Card.OnPick, card)
+end
+
+-- Выбранная строка: светлее и с золотой полоской слева.
+function Card.SetSelected(frame, on)
+    frame.selected = on and true or false
+    local card = frame.card
+    if frame.selected then
+        W.Paint(frame.fpBG, W.THEME.selected)
+        frame.bar:Show()
+        frame.spine:Hide()
+    else
+        if card and card.pinTop then
+            -- Закреплённый сверху совет (без него остальные неполны) - тёплым.
+            frame.fpBG:SetColorTexture(0.89, 0.72, 0.38, 0.07)
+        else
+            frame.fpBG:SetColorTexture(1, 1, 1, 0)
+        end
+        frame.bar:Hide()
+        frame.spine:Show()
+    end
+end
+
+function Card.Fill(frame, card, selected)
     frame.card = card
+    local T = W.THEME
 
     local spine = Card.SpineColor(card.kind)
-    frame.spine:SetColorTexture(spine[1], spine[2], spine[3], 0.95)
-
-    if card.pinTop then
-        frame.fpBG:SetColorTexture(0.16, 0.11, 0.04, 0.92)
-    else
-        frame.fpBG:SetColorTexture(0.08, 0.08, 0.10, 0.80)
-    end
+    frame.spine:SetColorTexture(spine[1], spine[2], spine[3], 0.85)
+    Card.SetSelected(frame, selected)
 
     frame.icon:SetTexture(card.icon or ns.KIND_ICON[card.kind] or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-    -- Сам текст заголовка ставится в конце, вместе с остальными строками: его
-    -- ширина зависит от столбца выгоды, а тот ещё не заполнен.
     if card.pinTop then
         frame.title:SetTextColor(1, 0.86, 0.55)
     else
-        frame.title:SetTextColor(1, 1, 1)
+        frame.title:SetTextColor(T.text[1], T.text[2], T.text[3])
     end
 
-    frame.benefit:SetText(card.benefit or "")
     local bc = W.benefitColor(card.benefitKind)
     frame.benefit:SetTextColor(bc[1], bc[2], bc[3])
 
-    local ready = card.plan and card.plan.ready
-    if ready then
-        frame.need:SetTextColor(0.50, 0.85, 0.55)
-    elseif card.kind == ns.KIND.SETUP then
-        frame.need:SetTextColor(1.00, 0.80, 0.40)
-    else
-        frame.need:SetTextColor(0.85, 0.72, 0.45)
-    end
-
-    frame.badge:Set(card.conf)
-    frame.meter:SetValue(card.plan and card.plan.readiness or (card.pinTop and 0 or 1))
-    if card.plan then frame.meter:Show() else frame.meter:Hide() end
-
-    local label = (card.action and card.action.label) or "Открыть"
-    frame.action:SetLabel(label)
-    frame.action:SetScript("OnClick", function() Card.Activate(card) end)
-    local showAction = not (card.action and card.action.kind == "noop")
-        and Card.ActionReady(card)
-    if showAction then frame.action:Show() else frame.action:Hide() end
-
-    -- Route button: needs a place with coordinates and a navigation addon to
-    -- hand them to. Missing either one is normal, and then there is no button.
-    local canRoute = card.place and card.place.routable and ns.Places:CanRoute()
-    if canRoute then
-        frame.route:Show()
-        frame.route:SetScript("OnClick", function() Card.Route(card) end)
-        frame.route:SetScript("OnEnter", function(self)
-            self.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
-            W.ShowTip(self, "Показать путь", {
-                ns.Places:Describe(card.place) or "",
-                "Поставлю метку на карте и стрелку на экране.",
-                "Иду я туда не сам — идёте вы.",
-            })
-        end)
-        frame.route:SetScript("OnLeave", function(self)
-            self.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
-            W.HideTip()
-        end)
-    else
-        frame.route:Hide()
-    end
-
-    -- Keep the badge anchored to whatever is actually visible.
-    frame.badge:ClearAllPoints()
-    if canRoute then
-        frame.badge:SetPoint("RIGHT", frame.route, "LEFT", -8, 0)
-    elseif showAction then
-        frame.badge:SetPoint("RIGHT", frame.action, "LEFT", -8, 0)
-    else
-        frame.badge:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 9)
-    end
-
-    -- ТЕКСТ - ПОСЛЕДНИМ, И ПО ИЗМЕРЕННОМУ МЕСТУ.
+    -- ТЕКСТ СТАВИТСЯ ПОСЛЕДНИМ И ПО ИЗМЕРЕННОМУ МЕСТУ.
     --
-    -- Раньше здесь стояло три SetText, а лишнее обрезал клиент - по пикселям,
-    -- то есть посреди числа («Разница +8з 80…»). Теперь сколько места есть,
-    -- столько и занимаем: ширина считается по разметке и по тому, что сейчас
-    -- нарисовано справа, а укорачивает текст W.SetFitted - целыми кусками и не
-    -- разрезая чисел. Поэтому ставится текст ПОСЛЕ кнопок: до них ширина
-    -- третьей строки неизвестна.
-    local room = Card.RoomFor(frame, card, showAction, canRoute)
-    local _, titleCut = W.SetFitted(frame.title, card.title or "", room.title)
-    local _, whyCut = W.SetFitted(frame.why, card.why or "", room.why)
-    local _, needCut = W.SetFitted(frame.need, card.need or "", room.need)
-    frame.cut = { title = titleCut, why = whyCut, need = needCut }
+    -- Сначала меряется заголовок целиком: выгоде достаётся её доля строки и
+    -- всё, что заголовку не нужно. Потом заголовок получает то, что осталось
+    -- слева от нарисованной выгоды. Что не влезло, укорачивается по смыслу и
+    -- помечается «…» (W.SetFitted): посреди числа ничего не режется, а полный
+    -- текст стоит в карточке справа и в подсказке.
+    local area = Card.TextArea(frame)
+    local title = Card.ListTitle(card)
+    -- Ширина заголовка целиком запоминается: список перерисовывается часто, а
+    -- совет в строке обычно тот же - мерить его шрифтом каждый раз незачем.
+    local known = frame.fpTitleWidth
+    local titleNeeds
+    if known and known.text == title then
+        titleNeeds = known.width
+    else
+        frame.title:SetText(title)
+        titleNeeds = tonumber(frame.title:GetStringWidth()) or 0
+        frame.fpTitleWidth = { text = title, width = titleNeeds }
+    end
+    frame.benefitRoom = math.max(math.floor(area * Card.BENEFIT_SHARE),
+        area - titleNeeds - Card.GAP)
+    local _, benefitCut = Card.FitBenefit(frame.benefit, card.benefit or "", frame.benefitRoom)
+    local room = Card.RoomFor(frame, card)
+    local _, titleCut = W.SetFitted(frame.title, title, room.title)
+    -- В строке заголовок короче полного (без слова раздела или укорочен) -
+    -- полный стоит под курсором.
+    frame.cut = { title = titleCut or (title ~= tostring(card.title or "")),
+                  benefit = benefitCut }
     return frame
 end
 
@@ -514,11 +875,27 @@ function Card.ActivateInner(card)
     if not card or not card.action then return end
     local act = card.action
 
+    -- ЧТО НАЖАТО - РЕШАЕТ Card.LiveAction, ТА ЖЕ, ЧТО ПОДПИСАЛА КНОПКУ.
+    local live = Card.LiveAction(card)
+
+    if live and live.kind == "auction" then
+        local _, message = ns.ShoppingList:SearchCard(card)
+        if message then ns.Api:Print(message) end
+        ns.MainFrame:Refresh()
+        return
+    end
+
     if act.kind == "findRecipe" then
-        -- КЛИЕНТ ЗДЕСЬ НЕ ЗОВЁТСЯ ВОВСЕ. Открыть рецепт в окне профессий игра
-        -- аддонам запрещает (Core/Api.lua), поэтому кнопки у совета нет, а
-        -- щелчок по самой карточке отвечает тем, что игроку и нужно: где этот
-        -- рецепт искать. Одной строкой и без чужих окон.
+        -- ОКНО ПРОФЕССИЙ ЗДЕСЬ НЕ ОТКРЫВАЕТСЯ. Открыть рецепт игра аддонам
+        -- запрещает (Core/Api.lua). Если клиент умеет искать по имени, в окне,
+        -- которое открыл игрок, остаётся один этот рецепт (RecipeBook:Show);
+        -- если нет - одной строкой сказано, что открыть и что найти.
+        if live and live.kind == "showRecipe" then
+            local _, message = ns.RecipeBook:Show(act.recipeID)
+            if message then ns.Api:Print(message) end
+            ns.MainFrame:Refresh()
+            return
+        end
         ns.Api:Print(ns.RecipeBook:FindText(act.recipeID)
             or ns.RecipeBook:ShowState().note)
         return

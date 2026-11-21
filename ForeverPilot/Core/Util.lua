@@ -762,6 +762,112 @@ function U.shortenings(text)
     return byValue
 end
 
+-- СУТЬ СОВЕТА БЕЗ СЛУЖЕБНЫХ ПОЯСНЕНИЙ.
+--
+-- Игрок сказал про это прямо (2026-11-21): «Вот эти вот „из кеша“ — это вообще
+-- лишняя информация, откуда взята информация и тому подобное… Мне не нужно
+-- знать, откуда ты брал эти данные. Мне нужно знать, что за данные, где купить
+-- что-то, где что-то продать».
+--
+-- Тексты советов пишет движок, и пишет честно до педантизма: у каждой цены в
+-- скобках стоит источник и возраст, у каждого совета - оговорка о том, чего
+-- аддон не делает и чего не знает. В файле диагностики и в подсказке панели
+-- это на месте. На экране же из текста остаётся суть:
+--   * скобки про источник и возраст числа убираются;
+--   * фразы-оговорки («я не знаю», «делаете вы сами», «4 дня наблюдений»)
+--     убираются целиком;
+--   * от оставшегося берётся несколько первых фраз.
+-- Настоящее предупреждение не теряется никогда: фраза с координатами или со
+-- словами из U.KEEP_MARKS («проверьте», «не сходятся») остаётся при любом
+-- сокращении - оно про деньги игрока, а не про устройство аддона.
+U.NOISE_ASIDES = { "аукцион,", "торговец,", "кеш", "оценка", "назад", "только что",
+                   "не стареет", "возраст", "выборка", "сбор аукциона", "наблюд",
+                   "источник" }
+U.NOISE_PHRASES = { "я ничего не", "не знаю", "не управляю", "делаете вы", "ставите вы",
+                    "игра мне не говорит", "наблюдени", "наблюдённ", "выдумывать",
+                    "не гадаю", "в моих данных", "собран ли облик", "записал",
+                    "не запомнил", "не проверял", "я считаю только", "не пересылаю",
+                    "не переключаю", "окон игры я не открываю", "откуда числа",
+                    "я не стоял", "мне не отдал", "мне не сообщ", "не оценка",
+                    "укладывается в" }
+
+-- ЦЕНА СЕЙЧАС НЕ ТАКАЯ, КАК ОБЫЧНО - это не оговорка, а предупреждение про
+-- деньги игрока, и оно остаётся при любом сокращении: совет «продать за 80с»
+-- вещь, которая всю неделю стоила 25с, без этой фразы читается как верный.
+U.ALERT_MARKS = { "выше всего, что", "ниже всего, что", "когда-либо видел",
+                  "выше той цены", "ниже той цены", "нетипично" }
+
+local looseSentences
+
+local function isNoise(low, list)
+    for _, mark in ipairs(list) do
+        if low:find(mark, 1, true) then return true end
+    end
+    return false
+end
+
+-- Убрать скобки про источник и возраст числа; остальные скобки не трогаем.
+function U.dropProvenance(text)
+    local out = tostring(text or ""):gsub("%s*%b()", function(piece)
+        if mustKeep(piece) then return piece end
+        if isNoise(U.lower(piece), U.NOISE_ASIDES) then return "" end
+        return piece
+    end)
+    out = out:gsub("%s+([%.,;:])", "%1"):gsub("  +", " ")
+    return (out:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Фразы для этой чистки делятся чуть смелее, чем в U.sentences: новая фраза
+-- начинается и с цифры («…71% наценки. 89с 98м укладывается в…»). Иначе
+-- оговорка, начатая с числа, приклеивается к полезной фразе перед ней и
+-- уносит её с собой.
+function looseSentences(text)
+    local out, start, i = {}, 1, 1
+    while i <= #text do
+        local c = text:sub(i, i)
+        if (c == "." or c == "!" or c == "?") and text:sub(i + 1, i + 1) == " "
+            and (isUpperAt(text, i + 2) or text:sub(i + 2, i + 2):match("%d")) then
+            out[#out + 1] = text:sub(start, i)
+            start = i + 2
+            i = i + 2
+        else
+            i = i + 1
+        end
+    end
+    local tail = text:sub(start):gsub("^%s+", "")
+    if tail ~= "" then out[#out + 1] = tail end
+    return out
+end
+
+function U.essence(text, limit)
+    text = tostring(text or "")
+    if text == "" then return "" end
+    limit = tonumber(limit) or 3
+    local lines = {}
+    for raw in (text .. "\n"):gmatch("([^\n]*)\n") do
+        local line = U.dropProvenance(raw)
+        if line ~= "" then
+            if line:sub(1, 3) == "•" then
+                -- Строка перечня - уже короткая, идёт целиком.
+                lines[#lines + 1] = line
+            else
+                local kept, taken = {}, 0
+                for _, sentence in ipairs(looseSentences(line)) do
+                    local low = U.lower(sentence)
+                    local must = mustKeep(sentence) or isNoise(low, U.ALERT_MARKS)
+                    local noise = (not must) and isNoise(low, U.NOISE_PHRASES)
+                    if must or (not noise and taken < limit) then
+                        kept[#kept + 1] = sentence
+                        if not must then taken = taken + 1 end
+                    end
+                end
+                if #kept > 0 then lines[#lines + 1] = table.concat(kept, " ") end
+            end
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
 -- То же, что U.truncate, но без разрезанных чисел: берётся самый ценный из
 -- вариантов U.shortenings, который укладывается в n символов. Там, где ширину
 -- мерить нечем (подпись стрелки, свёрнутая панель), счёт идёт по символам.

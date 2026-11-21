@@ -127,6 +127,76 @@ function F:Describe(entry, snap)
         score = ns.StatWeights:Score(stats, snap.weights)
     end
 
+    -- ПРИРОСТ ПРОТИВ ТОГО, ЧТО УЖЕ ЕСТЬ, А НЕ ПОЛНАЯ ОЦЕНКА ВЕЩИ.
+    --
+    -- Живая жалоба (маг 31 ур., 2026-11-21): карточка «За Благосклонность:
+    -- Жемчужные сапоги, +15 баллов» при надетых Сапогах из паучьего шелка,
+    -- которые лучше по каждой характеристике. «+15» было ПОЛНОЙ оценкой сапог,
+    -- как будто слот пуст: `score` выше ни с чем не сравнивается. Игрок купил
+    -- выкройку и реагенты под вещь хуже своей.
+    --
+    -- Вторая половина той же ошибки: «Сфера мистического прозрения» в левую
+    -- руку при двуручном посохе в правой. «Носится уже сейчас» проверяло
+    -- только уровень, а надеть её можно, лишь сняв посох.
+    --
+    -- Сравнение - тем же способом, что у ветки экипировки (Gear:Upgrades):
+    -- против надетого и против лучшего из того, что уже лежит в сумках.
+    --   gain             - прирост в баллах; nil = сравнить не с чем или нечем
+    --   notUpgrade       - посчитано, и вещь не лучше того, что есть
+    --   blockedByTwoHand - вещь в левую руку, а в правой двуручное
+    local gain, againstName, blockedByTwoHand, mainStatDrop = nil, nil, nil, nil
+    if score and slot and ns.GearAdvisor and ns.GearAdvisor.DisplacedValue
+        and snap and snap.weights then
+        local G = ns.GearAdvisor
+        local targetSlot, curScore, _, displaced =
+            G:DisplacedValue(slot, snap, snap.weights)
+        local floorScore, floorEntry = G:OwnedFloor(slot, snap, snap.weights)
+        local base, againstID = curScore, nil
+        local worn = targetSlot and snap.equipped and snap.equipped[targetSlot] or nil
+        if worn then againstID = worn.itemID end
+        if curScore ~= nil and floorScore and floorScore > curScore then
+            base = floorScore
+            if floorEntry and floorEntry.itemID then againstID = floorEntry.itemID end
+        end
+        if base ~= nil then gain = score - base end
+
+        -- То же вето, что у ветки экипировки: вещь, которая просаживает
+        -- главную характеристику профиля, улучшением не называется, что бы ни
+        -- говорила сумма.
+        if worn and displaced and #displaced <= 1 and G.Compare then
+            local cmp = G:Compare(worn.link or worn.itemID, out, snap.weights,
+                snap.weightSetKey)
+            if cmp and cmp.mainStatDrop then mainStatDrop = true end
+        end
+
+        -- ЛЕВАЯ РУКА ПРИ ДВУРУЧНОМ ОРУЖИИ. Слот левой руки у такого персонажа
+        -- пуст, и «прирост против пустого слота» - это вся оценка вещи, то
+        -- есть та же ошибка ещё раз. Честное сравнение: пара «лучшее
+        -- одноручное из своих + эта вещь» против двуручного, которое придётся
+        -- снять.
+        if targetSlot == "OFFHAND" and G.OwnedBySlot then
+            local twoScore, twoID, bestOne = nil, nil, 0
+            for _, e in ipairs(G:OwnedBySlot(snap)["MAINHAND"] or {}) do
+                if e.canEquip and not e.tool then
+                    local s = G:ItemScore(e.link or e.itemID, snap.weights)
+                    if e.twoHand then
+                        if e.where == "equipped" then twoScore, twoID = s, e.itemID end
+                    elseif s and s > bestOne then
+                        bestOne = s
+                    end
+                end
+            end
+            if twoID then
+                blockedByTwoHand = true
+                againstID = twoID
+                gain = (twoScore ~= nil) and ((bestOne + score) - twoScore) or nil
+            end
+        end
+        if againstID and G.ItemLabel then againstName = G:ItemLabel(againstID) end
+    end
+    -- Полбалла - это «+0 баллов» на карточке: улучшением не считается.
+    local notUpgrade = ((gain ~= nil and gain <= 0.5) or mainStatDrop) and true or false
+
     -- ШКОЛА ПРОВЕРЯЕТСЯ, И ПРОВЕРЯЕТСЯ ЧИСЛАМИ.
     --
     -- Справочник H.MF_FIRST_BUYS_ARCANE собран по одному семейству - сайт
@@ -207,6 +277,13 @@ function F:Describe(entry, snap)
         slot = slot,
         slotLabel = slot and ns.SlotMap:Label(slot) or nil,
         stats = stats, statText = statText, score = score,
+        -- Прирост против надетого/лежащего в сумках - см. блок выше. Карточка
+        -- обязана показывать ЕГО, а не score.
+        gain = gain,
+        againstName = againstName,
+        notUpgrade = notUpgrade,
+        blockedByTwoHand = blockedByTwoHand or false,
+        mainStatDrop = mainStatDrop or false,
         -- Школьный урон предмета и чего он стоит по весам персонажа.
         -- schoolOffProfile = «школьный урон на предмете есть, и весит он у
         -- этого персонажа ровно ноль». Числа рядом, чтобы карточка могла
@@ -304,7 +381,9 @@ function F:Plan(snap)
             else
                 list[#list + 1] = d
                 totalFavor = totalFavor + (d.favor or 0)
-                if d.affordableBySkill and d.wearableNow then
+                -- «Носится сейчас» - это ещё и «есть смысл надеть»: вещь хуже
+                -- надетой в этот счёт не идёт.
+                if d.affordableBySkill and d.wearableNow and not d.notUpgrade then
                     nowCount = nowCount + 1
                     nowFavor = nowFavor + (d.favor or 0)
                 end
@@ -337,13 +416,16 @@ function F:Plan(snap)
     end
 
     table.sort(list, function(a, b)
-        local an = (a.affordableBySkill and a.wearableNow) and 1 or 0
-        local bn = (b.affordableBySkill and b.wearableNow) and 1 or 0
+        local an = (a.affordableBySkill and a.wearableNow and not a.notUpgrade) and 1 or 0
+        local bn = (b.affordableBySkill and b.wearableNow and not b.notUpgrade) and 1 or 0
         if an ~= bn then return an > bn end
-        -- Польза на единицу Favor; без оценки - по порогу навыка, то есть
-        -- сначала то, что дешевле всего даётся.
-        local ap = (a.score and a.favor and a.favor > 0) and (a.score / a.favor) or -1
-        local bp = (b.score and b.favor and b.favor > 0) and (b.score / b.favor) or -1
+        -- Польза на единицу Favor - это ПРИРОСТ на единицу, а не полная оценка
+        -- вещи; без прироста (сравнить было нечем) - полная оценка, без неё -
+        -- по порогу навыка, то есть сначала то, что дешевле всего даётся.
+        local av = a.gain or a.score
+        local bv = b.gain or b.score
+        local ap = (av and a.favor and a.favor > 0) and (av / a.favor) or -1
+        local bp = (bv and b.favor and b.favor > 0) and (bv / b.favor) or -1
         if ap ~= bp then return ap > bp end
         return (a.skillNeeded or 0) < (b.skillNeeded or 0)
     end)

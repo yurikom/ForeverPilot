@@ -1,9 +1,15 @@
 -- ForeverPilot / UI/TabSettings.lua
 --
--- Settings, plus the honest diagnostics: which game functions this client
--- actually gave us, and which enchant categories we had to guess a slot for.
--- The guesses are editable here, because a wrong guess is better fixed once by
--- the player than argued with forever.
+-- Раздел «Настройки»: вид окна, панель текущего шага, навигация, что учитывать
+-- в советах и служебные кнопки.
+--
+-- ЗДЕСЬ ТОЛЬКО ТО, ЧТО МОЖНО ПЕРЕКЛЮЧИТЬ, И КОРОТКАЯ СТРОКА ТАМ, ГДЕ БЕЗ НЕЁ
+-- НЕПОНЯТНО. Раньше раздел наполовину состоял из абзацев о том, как аддон
+-- устроен и откуда берёт данные («Что эта игра мне сообщает», «Своя история
+-- цен», «Чужая книга закупок»). Игрок назвал это лишним (2026-11-21); всё это
+-- есть в файле диагностики (/fp diag).
+--
+-- Широкое окно - две колонки, узкое - одна.
 local ADDON, ns = ...
 
 local U = ns.Util
@@ -12,7 +18,13 @@ local W = ns.Widgets
 local Tab = {}
 ns.TabSettings = Tab
 
-Tab.PAD = 12
+Tab.PAD = 24
+Tab.COL_GAP = 40
+Tab.TWO_COL_MIN = 700
+Tab.COL_MAX = 480
+Tab.CHECK_H = 26
+Tab.BUTTON_H = 26
+Tab.SLOT_COL = 210           -- где стоит слот в строке «категория чар - слот»
 
 local SLOT_CHOICES = {
     "HEAD", "NECK", "SHOULDER", "BACK", "CHEST", "WRIST", "HANDS",
@@ -26,8 +38,8 @@ function Tab:Build(parent)
     self.frame = frame
 
     local scroll, content = W.ScrollArea(frame)
-    scroll:SetPoint("TOPLEFT", Tab.PAD, -Tab.PAD)
-    scroll:SetPoint("BOTTOMRIGHT", -(Tab.PAD + 22), Tab.PAD)
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", Tab.PAD, -16)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -Tab.PAD, 14)
     self.scroll, self.content = scroll, content
     self.pool = {}
     return frame
@@ -42,76 +54,100 @@ function Tab:Widget(kind, index, builder)
     return w
 end
 
+-- Ширина содержимого и колонок - от размера окна, а не от того, успел ли
+-- клиент разложить рамки.
+function Tab:Columns()
+    local hostW = ns.MainFrame:HostNow()
+    local width = math.max(260, hostW - 2 * Tab.PAD - 14)
+    if width >= Tab.TWO_COL_MIN then
+        local col = math.min(Tab.COL_MAX, math.floor((width - Tab.COL_GAP) / 2))
+        return width, { { x = 0, w = col, y = 0 }, { x = col + Tab.COL_GAP, w = col, y = 0 } }
+    end
+    return width, { { x = 0, w = math.min(Tab.COL_MAX, width), y = 0 } }
+end
+
 function Tab:Render()
     if not self.frame then return end
     for _, w in pairs(self.pool) do w:Hide() end
+    local T = W.THEME
 
     local cfg = ns.Config:Get()
-    local width = (self.scroll:GetWidth() or 620) - 8
-    local y = 0
-    local counters = { head = 0, stat = 0, note = 0, check = 0, slider = 0, button = 0, slot = 0 }
+    local width, cols = self:Columns()
+    -- Колонка, в которую сейчас ставятся строки. В узком окне она одна.
+    local cur = cols[1]
+    local counters = { head = 0, stat = 0, note = 0, check = 0, radio = 0, slider = 0,
+                       button = 0, slot = 0 }
+    local function take(kind, builder)
+        counters[kind] = counters[kind] + 1
+        return self:Widget(kind, counters[kind], builder)
+    end
 
-    local function place(w, h)
+    local function place(w, h, gapBefore)
         w:ClearAllPoints()
-        w:SetPoint("TOPLEFT", self.content, "TOPLEFT", 0, -y)
-        y = y + h
+        w:SetPoint("TOPLEFT", self.content, "TOPLEFT", cur.x, -(cur.y + (gapBefore or 0)))
+        cur.y = cur.y + (gapBefore or 0) + h
     end
     local function head(text)
-        counters.head = counters.head + 1
-        local w = self:Widget("head", counters.head, function()
-            return W.SectionHeader(self.content, "", width)
-        end)
-        w:SetWidth(width); w.text:SetText(text); place(w, 28)
+        local w = take("head", function() return W.SectionHeader(self.content, "", cur.w) end)
+        w:SetWidth(cur.w)
+        w.text:SetText(text)
+        place(w, 26 + 8, (cur.y > 0) and 16 or 0)
     end
-    local function stat(label, value)
-        counters.stat = counters.stat + 1
-        local w = self:Widget("stat", counters.stat, function()
-            return W.StatRow(self.content, "", "", width)
-        end)
+    local function stat(label, value, tone)
+        local w = take("stat", function() return W.StatRow(self.content, "", "", cur.w) end)
+        w:SetWidth(cur.w)
+        local c = (tone == "warn" and T.warn) or (tone == "good" and T.good) or T.text
+        w.value:SetTextColor(c[1], c[2], c[3])
         -- Нет значения - «не знаю», а не прочерк: см. ns.VOID в Core/Const.lua.
-        w:SetWidth(width); w.label:SetText(label)
-        w.value:SetText(value or U.void(ns.VOID.UNKNOWN))
-        place(w, 18)
+        w:SetBoth(label, value or U.void(ns.VOID.UNKNOWN))
+        place(w, W.STAT_H)
     end
-    local function note(text)
-        counters.note = counters.note + 1
-        local w = self:Widget("note", counters.note, function()
-            local fs = W.Label(self.content, "", W.FONT_SMALL, 0.58, 0.58, 0.58)
-            fs:SetWordWrap(true); fs:SetJustifyH("LEFT")
+    local function note(text, tone)
+        local w = take("note", function()
+            local fs = W.Label(self.content, "", W.FONT_SMALL)
+            fs:SetJustifyH("LEFT")
             return fs
         end)
-        w:SetWidth(width); w:SetText(text)
-        place(w, math.max(14, (w:GetStringHeight() or 12) + 6))
+        local c = (tone == "warn" and T.warn) or T.muted
+        w:SetTextColor(c[1], c[2], c[3])
+        local h = W.SetWrapped(w, text, cur.w, W.LINE)
+        place(w, h + 8, 2)
     end
     local function check(label, value, onToggle)
-        counters.check = counters.check + 1
-        local w = self:Widget("check", counters.check, function()
-            return W.Checkbox(self.content, "", nil)
-        end)
-        w:SetWidth(width)
+        local w = take("check", function() return W.Checkbox(self.content, "", nil) end)
+        w:SetWidth(cur.w)
         w.label:SetText(label)
         w:SetChecked(value)
         w:SetScript("OnClick", function(self2)
             self2:SetChecked(not self2.checked)
             onToggle(self2.checked)
         end)
-        place(w, 22)
+        place(w, Tab.CHECK_H)
     end
-    local function button(label, onClick, btnWidth)
-        counters.button = counters.button + 1
-        local w = self:Widget("button", counters.button, function()
-            return W.Button(self.content, "", btnWidth or 180, 22, nil)
+    -- Один из нескольких. Щелчок по уже выбранному ничего не меняет.
+    local function radio(label, isOn, onPick)
+        local w = take("radio", function() return W.Radio(self.content, "", nil) end)
+        w:SetWidth(cur.w)
+        w.label:SetText(label)
+        w:SetChecked(isOn)
+        w:SetScript("OnClick", function() onPick() end)
+        place(w, Tab.CHECK_H)
+    end
+    local function button(label, onClick, minWidth)
+        local w = take("button", function()
+            return W.Button(self.content, "", 180, Tab.BUTTON_H, nil)
         end)
-        w:SetWidth(btnWidth or 180)
         w:SetLabel(label)
+        w:Resize(U.clamp((tonumber(w.text:GetStringWidth()) or 150) + 28,
+            minWidth or 150, cur.w), Tab.BUTTON_H)
         w:SetScript("OnClick", onClick)
-        place(w, 28)
+        place(w, Tab.BUTTON_H, 6)
+        return w
     end
 
-    -- Appearance -------------------------------------------------------
-    head("Внешний вид")
-    counters.slider = counters.slider + 1
-    local slider = self:Widget("slider", counters.slider, function()
+    -- Вид окна -----------------------------------------------------------
+    head("Вид окна")
+    local slider = take("slider", function()
         return W.Slider(self.content, "Масштаб окна", 0.70, 1.60, 0.05, function(v)
             ns.Config:SetScale(v)
             ns.MainFrame:ApplyScale()
@@ -127,9 +163,8 @@ function Tab:Render()
         cfg.ui.minimapButton = on
         ns.MainFrame:ApplyMinimapButton()
     end)
-    note("Кнопку можно таскать мышью по краю миникарты — место запоминается.")
     -- Сбрасывается и РАЗМЕР тоже. Кнопка и команда /fp reset делали разное:
-    -- команда возвращала 720x560, а кнопка — только координаты, и растянутое
+    -- команда возвращала размер, а кнопка — только координаты, и растянутое
     -- окно оставалось растянутым. Одно название, два поведения.
     button("Сбросить позицию и размер окна", function()
         ns.Config:SaveFrame("CENTER", "CENTER", 0, 0, 720, 560)
@@ -141,17 +176,8 @@ function Tab:Render()
         ns.MainFrame:ApplyMinimapButton()
     end)
 
-    -- Compact panel ----------------------------------------------------
+    -- Панель текущего шага -------------------------------------------------
     head("Панель текущего шага")
-    -- Описание — только когда панель есть. Иначе строка рассказывает про «✕ в
-    -- её углу» у панели, которой на экране нет, и спорит с соседней строкой
-    -- «Панель убрана».
-    if cfg.panel.enabled then
-        note("Маленькая панель всегда на экране: один верхний совет, кнопка пути"
-            .. " и кнопка самого совета. Щелчок по панели открывает это окно,"
-            .. " а кнопка " .. ns.GLYPH.CLOSE
-            .. " в её правом верхнем углу убирает её.")
-    end
     -- Через те же TurnOn/TurnOff, что и все остальные пути: галочка раньше была
     -- единственным путём, который молчал в чат, а в подземелье ещё и выглядела
     -- сломанной — поставил, и ничего не появилось без объяснений.
@@ -160,66 +186,48 @@ function Tab:Render()
         Tab:Render()
     end)
 
-    -- ВЫКЛЮЧЕННАЯ ПАНЕЛЬ НЕ ПОКАЗЫВАЕТ СВОИХ НАСТРОЕК.
-    --
-    -- Все галочки ниже управляют панелью, которой нет на экране: щёлкаешь — и
-    -- ничего не происходит. Контрол, который виден и ничего не делает, выглядит
-    -- точно так же, как сломанный. Поэтому их просто нет, пока панель убрана, а
-    -- вместо них одна строка, объясняющая, куда они делись.
-    if not cfg.panel.enabled then
-        note("Панель убрана, поэтому остальные её настройки спрятаны —"
-            .. " управлять нечем. Поставьте галочку выше, и они вернутся."
-            .. " То же делает команда /fp panel.")
-    else
-    check("Свернуть панель", cfg.panel.collapsed, function()
-        ns.StepPanel:ToggleCollapsed()
-    end)
-    check("Закрепить (не перетаскивать)", cfg.panel.locked, function(on)
-        cfg.panel.locked = on
-    end)
-    -- Здесь была галочка «Меньше анимации». Она управляла ровно одной вещью -
-    -- анимацией «готово», которую проигрывала «Дальше», прежде чем спрятать
-    -- совет. «Дальше» больше ничего не прячет и анимации у неё нет, так что
-    -- галочка осталась бы на экране и не делала ничего. Настройка, которая
-    -- ничего не меняет, - тот же мусор, что и текст про кнопку, которой нет.
-    for _, opt in ipairs({
-        { "show", "В бою: показывать как обычно" },
-        { "fade", "В бою: приглушить" },
-        { "hide", "В бою: скрыть" },
-    }) do
-        local isOn = (cfg.panel.combat == opt[1])
-        check((isOn and ns.GLYPH.RADIO_ON or ns.GLYPH.RADIO_OFF) .. opt[2], isOn, function()
-            cfg.panel.combat = opt[1]
+    -- ВЫКЛЮЧЕННАЯ ПАНЕЛЬ НЕ ПОКАЗЫВАЕТ СВОИХ НАСТРОЕК: контрол, который виден и
+    -- ничего не делает, выглядит точно так же, как сломанный.
+    if cfg.panel.enabled then
+        check("Свернуть панель", cfg.panel.collapsed, function()
+            ns.StepPanel:ToggleCollapsed()
+        end)
+        check("Закрепить (не перетаскивать)", cfg.panel.locked, function(on)
+            cfg.panel.locked = on
+        end)
+        for _, opt in ipairs({
+            { "show", "В бою: показывать как обычно" },
+            { "fade", "В бою: приглушить" },
+            { "hide", "В бою: скрыть" },
+        }) do
+            radio(opt[2], cfg.panel.combat == opt[1], function()
+                cfg.panel.combat = opt[1]
+                ns.StepPanel:ApplyVisibility()
+                Tab:Render()
+            end)
+        end
+        check("Скрывать в подземельях", cfg.panel.instance == "hide", function(on)
+            cfg.panel.instance = on and "hide" or "show"
             ns.StepPanel:ApplyVisibility()
-            Tab:Render()
+        end)
+        button("Вернуть панель на место", function()
+            ns.StepPanel:ResetPosition()
         end)
     end
-    local hideInInstance = (cfg.panel.instance == "hide")
-    check("Скрывать в подземельях", hideInInstance, function(on)
-        cfg.panel.instance = on and "hide" or "show"
-        ns.StepPanel:ApplyVisibility()
-    end)
-    note("Правила боя и подземелий не трогают саму галочку «Показывать панель»"
-        .. " — выйдя из боя, вы получите ровно то состояние, которое выбрали.")
-    button("Вернуть панель на место", function()
-        ns.StepPanel:ResetPosition()
-    end)
-    end
 
-    -- Navigation -------------------------------------------------------
+    -- Навигация ----------------------------------------------------------
     head("Навигация")
     local places = ns.Places:Summary()
     for _, opt in ipairs({
-        { "own", "Своя стрелка (ничего не нужно устанавливать)" },
-        { "tomtom", "Отдавать точку TomTom" },
+        { "own", "Своя стрелка" },
+        { "tomtom", "Отдавать точку аддону TomTom" },
         { "off", "Выключить навигацию" },
     }) do
-        local isOn = (cfg.nav.provider == opt[1])
         local label = opt[2]
         if opt[1] == "tomtom" and not places.tomtom then
-            label = label .. "  |cff808080(TomTom не загружен)|r"
+            label = label .. " (не установлен)"
         end
-        check((isOn and ns.GLYPH.RADIO_ON or ns.GLYPH.RADIO_OFF) .. label, isOn, function()
+        radio(label, cfg.nav.provider == opt[1], function()
             cfg.nav.provider = opt[1]
             if opt[1] ~= "own" then ns.Arrow:Clear() end
             ns.MainFrame:Rebuild(true)
@@ -234,22 +242,32 @@ function Tab:Render()
     end)
     button("Вернуть стрелку на место", function() ns.Arrow:ResetPosition() end)
     button("Убрать стрелку", function() ns.Arrow:Clear() end)
+    note("Стрелка показывает направление по прямой и расстояние. Торговцы и"
+        .. " тренеры попадают в список мест, когда вы к ним подходите.")
 
-    stat("Направление взгляда", places.hasFacing
-        and "|cff60c060игра сообщает|r"
-        or "|cffffcc40игра не сообщает — вместо стрелки будет направление по карте|r")
-    stat("Записано мест", places.npcs .. ", из них с координатами " .. places.routable)
-    stat("Торговцы по предметам", tostring(places.items))
-    stat("Тренеры", tostring(places.trainers))
-    note("Координаты я записываю сам, когда вы открываете торговца или тренера."
-        .. " Готовую базу координат из другого аддона прочитать нельзя: она лежит"
-        .. " в его приватной области, недоступной извне. Поэтому в первый запуск"
-        .. " маршрутов нет, и они появляются по мере игры.")
-    note("Стрелка показывает направление по прямой и расстояние. Это не"
-        .. " прокладка маршрута: обойти скалу она не подскажет. Если цель в"
-        .. " другой зоне, стрелки не будет — будет зона и координаты текстом.")
+    -- Когда писать в чат ---------------------------------------------------
+    --
+    -- Три повода сказать что-то в чат по своей инициативе, и каждый
+    -- выключается отдельно. Выключается СООБЩЕНИЕ, а не работа.
+    head("Когда писать мне в чат")
+    cfg.notify = cfg.notify or {}
+    check("Про выгодную сделку, пока вы у аукциона",
+        cfg.notify.auctionDeals ~= false, function(on)
+        cfg.notify.auctionDeals = on
+    end)
+    check("Когда поднимется потолок навыка",
+        cfg.notify.skillCap ~= false, function(on)
+        cfg.notify.skillCap = on
+    end)
+    check("Когда цены старше суток",
+        cfg.notify.stalePrices ~= false, function(on)
+        cfg.notify.stalePrices = on
+    end)
 
-    -- What counts ------------------------------------------------------
+    -- Дальше - вторая колонка (в узком окне - та же, продолжением).
+    if cols[2] then cur = cols[2] end
+
+    -- Что учитывать --------------------------------------------------------
     head("Что учитывать в советах")
     check("Считать материалы в банке", cfg.show.includeBank, function(on)
         cfg.show.includeBank = on
@@ -267,9 +285,6 @@ function Tab:Render()
         cfg.show.skipClassCheck = on
         ns.MainFrame:Rebuild(true)
     end)
-    note("Проверка брони по классу — моё собственное правило, а не данные клиента."
-        .. " Если оно ошибается, выключите его: тогда я буду предлагать надеть всё,"
-        .. " что подходит по уровню.")
 
     -- МЕЛКАЯ ДЕНЕЖНАЯ ВЫГОДА ------------------------------------------
     --
@@ -277,35 +292,30 @@ function Tab:Render()
     -- намертво: игрок может сменить полосу на своё число или снять порог вовсе.
     -- Числа берутся из ns.MONEY_FLOOR_BANDS, а действующий порог - из
     -- Config:MoneyFloor, то есть из того же места, которым отсеивает движок.
-    -- Второго ответа на вопрос «какой сейчас порог» в аддоне нет.
     head(ns.ActionEngine.MONEY_FLOOR_SECTION)
-    note("Мелкий денежный выигрыш — вода: строку он занимает, а идти за ним не"
-        .. " стоит. Поэтому денежные советы, которые дают меньше порога, я в"
-        .. " список не ставлю — но и не съедаю молча: над списком пишу, сколько"
-        .. " их и какой был самый крупный из убранных. Порог касается только"
-        .. " денег: советы про экипировку, чары и прокачку навыка он не трогает,"
-        .. " их выгода не в золоте.")
+    note("Денежные советы с выгодой меньше порога в список не попадают."
+        .. " Экипировки, чар и навыка порог не касается.")
     local who = ns.CharacterScanner:Get()
     local myLevel = who and who.level or nil
     local floorMode = ns.Config:MoneyFloorMode()
     for _, opt in ipairs({
-        { ns.MONEY_FLOOR_MODE.LEVEL, "По уровню персонажа: чем выше уровень, тем выше порог" },
+        { ns.MONEY_FLOOR_MODE.LEVEL, "По уровню персонажа" },
         { ns.MONEY_FLOOR_MODE.FIXED, "Одно моё число на все уровни" },
-        { ns.MONEY_FLOOR_MODE.OFF, "Показывать любую денежную выгоду, даже в пару медяков" },
+        { ns.MONEY_FLOOR_MODE.OFF, "Показывать любую выгоду, даже в пару медяков" },
     }) do
-        local isOn = (floorMode == opt[1])
-        check((isOn and ns.GLYPH.RADIO_ON or ns.GLYPH.RADIO_OFF) .. opt[2], isOn, function()
+        radio(opt[2], floorMode == opt[1], function()
             ns.Config:SetMoneyFloorMode(opt[1])
             ns.MainFrame:Rebuild(true)
             Tab:Render()
         end)
     end
-    local myBand = ns.Config:MoneyFloorBand(myLevel)
-    for _, band in ipairs(ns.MONEY_FLOOR_BANDS) do
-        stat(band.label .. ((band == myBand) and "  |cff60c060(ваша полоса)|r" or ""),
-            "от " .. U.money(band.copper))
-    end
-    if floorMode == ns.MONEY_FLOOR_MODE.FIXED then
+    if floorMode == ns.MONEY_FLOOR_MODE.LEVEL then
+        local myBand = ns.Config:MoneyFloorBand(myLevel)
+        for _, band in ipairs(ns.MONEY_FLOOR_BANDS) do
+            stat(band.label .. ((band == myBand) and " — вы здесь" or ""),
+                "от " .. U.money(band.copper), (band == myBand) and "good" or nil)
+        end
+    elseif floorMode == ns.MONEY_FLOOR_MODE.FIXED then
         -- Лестница, а не ползунок: ползунок печатал бы «20.00», и это не деньги.
         -- Тот же приём, что у категорий чар ниже, - нажатие берёт следующее.
         button("Моё число: " .. U.money(ns.Config:MoneyFloorOwn())
@@ -321,148 +331,73 @@ function Tab:Render()
             Tab:Render()
         end, 330)
     end
-    -- ПОДПИСЬ МЕНЯЕТСЯ ВМЕСТЕ СО ЗНАЧЕНИЕМ. «Не показываю советы ниже: порога
-    -- нет» - это строка, которая спорит сама с собой; при снятом пороге вопрос
-    -- другой, и назван он по-другому.
     -- Скобки вокруг вызова обязательны: Config:MoneyFloor возвращает НЕСКОЛЬКО
     -- значений, и без них второе уехало бы в tonumber как основание счисления.
     local floorNow = tonumber((ns.Config:MoneyFloor(myLevel))) or 0
     if floorNow > 0 then
-        stat("Сейчас не показываю денежные советы ниже", U.money(floorNow))
+        stat("Сейчас порог", U.money(floorNow))
     else
-        stat("Сейчас порог", "|cff60c060снят — показываю любую денежную выгоду|r")
-    end
-    local cut = (ns.ActionEngine.meta or {}).moneyFloorDropped or 0
-    if cut > 0 then
-        stat("Убрано на прошлом пересчёте", cut .. " "
-            .. U.plural(cut, "совет", "совета", "советов"))
+        stat("Сейчас порог", "снят", "good")
     end
 
-    -- Notifications ----------------------------------------------------
-    --
-    -- Три повода сказать что-то в чат по своей инициативе, и каждый
-    -- выключается отдельно. Главное, что здесь написано словами: выключается
-    -- СООБЩЕНИЕ, а не работа. Выключатель, который втихую отключал бы расчёт,
-    -- был бы тем же самым тихим поведением, от которого игрок уже пострадал.
-    head("Когда писать мне в чат")
-    cfg.notify = cfg.notify or {}
-    check("Про выгодную сделку, пока вы у аукциона",
-        cfg.notify.auctionDeals ~= false, function(on)
-        cfg.notify.auctionDeals = on
-    end)
-    check("Когда поднимется потолок навыка",
-        cfg.notify.skillCap ~= false, function(on)
-        cfg.notify.skillCap = on
-    end)
-    check("Когда цены старше суток",
-        cfg.notify.stalePrices ~= false, function(on)
-        cfg.notify.stalePrices = on
-    end)
-    note("Выключается сообщение, а не работа: карточки, пересчёт и запись цен"
-        .. " идут при любой галочке. Про сделку говорю не больше одного раза за"
-        .. " посещение аукциона, про один и тот же подъём потолка — один раз.")
-
-    -- Stat weights -----------------------------------------------------
+    -- Веса характеристик ---------------------------------------------------
     head("Веса характеристик")
     local snap = ns.CharacterScanner:Get()
-    -- СПРАШИВАТЬ У СНИМКА, А НЕ СЧИТАТЬ ЗАНОВО.
-    --
-    -- Здесь стоял повторный вызов StatWeights:Active БЕЗ снимка - а именно
-    -- снимок включает вывод школы по надетым вещам. Поэтому раздел настроек
-    -- мог показывать «школа не определена» в тот момент, когда все карточки
-    -- считались по школе, выведенной из вещей: два разных ответа на один
-    -- вопрос на двух экранах. Снимок - тот самый ответ, по которому считаются
-    -- советы, поэтому берём его.
+    -- СПРАШИВАТЬ У СНИМКА, А НЕ СЧИТАТЬ ЗАНОВО: снимок - тот самый ответ, по
+    -- которому считаются советы. Повторный вызов StatWeights:Active без снимка
+    -- давал здесь другой ответ, чем на карточках.
     local activeKey = snap and snap.weightSetKey
-    local wConf = snap and snap.weightConf
     if not activeKey then
-        local _, key, conf = ns.StatWeights:Active(snap and snap.classFile,
+        local _, key = ns.StatWeights:Active(snap and snap.classFile,
             snap and snap.spec, snap)
-        activeKey, wConf = key, conf
+        activeKey = key
     end
-    stat("Сейчас используется", (ns.StatWeights.SET_LABEL[activeKey] or activeKey)
-        .. "  |cff808080(" .. (ns.CONF_LABEL[wConf] or "?") .. ")|r")
+    stat("Сейчас используется", ns.StatWeights.SET_LABEL[activeKey] or activeKey)
+    note("По весам считается, какая вещь лучше. Ничего не выбрано — определяю"
+        .. " сам по классу и специализации.")
     local charDB = ns.Config:Char()
-    -- ВЫБРАТЬ РУКАМИ МОЖНО ЛЮБОЙ НАБОР, ВКЛЮЧАЯ ШКОЛЬНЫЕ.
-    --
-    -- Список был из пяти «ролей», а школьных наборов (тайный, огонь, лёд, тень,
-    -- природа) в нём не было вовсе - при том что именно по школе считается
-    -- главная характеристика кастера. Если автоопределение промахнулось - а оно
-    -- выводит школу по надетым вещам, то есть по улике, а не по факту, -
-    -- исправить его было нечем. Порядок берётся из ns.StatWeights.SETS через
-    -- явный список ключей, чтобы экран не зависел от порядка обхода таблицы.
+    -- ВЫБРАТЬ РУКАМИ МОЖНО ЛЮБОЙ НАБОР, ВКЛЮЧАЯ ШКОЛЬНЫЕ. Порядок берётся из
+    -- явного списка ключей, чтобы экран не зависел от порядка обхода таблицы.
+    -- Повторный щелчок по выбранному снимает выбор.
     for _, key in ipairs(ns.StatWeights.OVERRIDE_ORDER) do
-        local label = ns.StatWeights.SET_LABEL[key] or key
-        local isOn = (charDB.statWeightOverride == key)
-        check((isOn and ns.GLYPH.RADIO_ON or ns.GLYPH.RADIO_OFF) .. label, isOn, function()
-            charDB.statWeightOverride = (charDB.statWeightOverride == key) and nil or key
-            ns.MainFrame:Rebuild(true)
-            Tab:Render()
-        end)
+        radio(ns.StatWeights.SET_LABEL[key] or key, charDB.statWeightOverride == key,
+            function()
+                charDB.statWeightOverride = (charDB.statWeightOverride ~= key) and key or nil
+                ns.MainFrame:Rebuild(true)
+                Tab:Render()
+            end)
     end
-    -- ЧТО ИДЁТ В БАЛЛ - ИЗ АКТИВНОГО НАБОРА, А НЕ ВПИСАНО.
-    --
-    -- Здесь стояло «для вашего класса в балл идут интеллект, сила магии и дух, а
-    -- сила не идёт вовсе» - перечисление кастерских характеристик, выданное за
-    -- характеристики «вашего класса». Воин с набором MELEE_DPS читал, что сила
-    -- не идёт вовсе, тогда как в его наборе она как раз главная. Теперь строка
-    -- собирается из самого набора: что весит больше всего и что весит ноль.
-    local counted, ignored = ns.StatWeights:WeightSummary(activeKey)
-    local tail
-    if counted and #counted > 0 then
-        tail = "для вашего набора весов в балл идут " .. table.concat(counted, ", ")
-        if ignored and #ignored > 0 then
-            tail = tail .. ", а " .. table.concat(ignored, ", ") .. " не идут вовсе"
-        end
-        tail = tail .. "."
-    else
-        tail = "что именно идёт в балл, видно в разделе «Мой персонаж»."
-    end
-    -- ОДНО СЛОВО НА ВСЁ ОКНО. Здесь единица подставлялась из ns.UNIT_BENEFIT и
-    -- тут же объяснялась словом «балл» - то есть в одной фразе стояли и
-    -- «прирост „ед. пользы“», и «мой условный балл». Это два названия одного
-    -- числа, а игрок читает их как два разных. Теперь название одно, и это то
-    -- же слово, которое стоит на карточках (см. ns.UNIT_BENEFIT).
-    note("Пустой выбор = определяю сам по классу и специализации."
-        .. " Веса — оценка, а не факт из клиента: прирост в баллах — это мой"
-        .. " условный счёт по этим весам, им удобно сравнивать вещи между собой."
-        .. " Балл — не характеристика «сила» и вообще не характеристика из игры: "
-        .. tail)
 
-    -- Enchant slot mapping ---------------------------------------------
-    head("Чары: какой слот у какой категории")
+    -- Чары: слот категории -------------------------------------------------
     local cats = ns.RecipeBook:EnchantCategories()
-    if #cats == 0 then
-        note("Пока ни одной категории чар не найдено. Откройте окно наложения чар —"
-            .. " я прочитаю категории и разложу формулы по слотам.")
-    else
-        note("Слот определяется по категории рецепта, внешняя база не нужна."
-            .. " Если я угадал мимо — нажмите на строку, слот сменится на следующий"
-            .. " по списку, и выбор запомнится.")
+    if #cats > 0 then
+        head("Чары: какой слот у какой категории")
+        note("Слот не тот — нажмите на строку, он сменится на следующий.")
         for _, cat in ipairs(cats) do
-            counters.slot = counters.slot + 1
-            local w = self:Widget("slot", counters.slot, function()
+            local w = take("slot", function()
                 local btn = CreateFrame("Button", nil, self.content)
-                btn:SetHeight(18)
-                btn.label = W.Label(btn, "", W.FONT_SMALL, 0.70, 0.70, 0.70)
+                btn:SetHeight(W.STAT_H)
+                btn.label = W.Label(btn, "", W.FONT_SMALL, T.muted[1], T.muted[2], T.muted[3])
                 btn.label:SetPoint("LEFT", 0, 0)
-                btn.value = W.Label(btn, "", W.FONT_SMALL, 0.92, 0.92, 0.92)
-                btn.value:SetPoint("LEFT", btn, "LEFT", 240, 0)
+                btn.label:SetWordWrap(false)
+                btn.value = W.Label(btn, "", W.FONT_SMALL, T.text[1], T.text[2], T.text[3])
+                btn.value:SetPoint("LEFT", btn, "LEFT", Tab.SLOT_COL, 0)
+                btn.value:SetWordWrap(false)
                 btn:SetScript("OnEnter", function(s)
-                    s.label:SetTextColor(1, 0.82, 0)
+                    s.label:SetTextColor(T.accent[1], T.accent[2], T.accent[3])
                 end)
                 btn:SetScript("OnLeave", function(s)
-                    s.label:SetTextColor(0.70, 0.70, 0.70)
+                    s.label:SetTextColor(T.muted[1], T.muted[2], T.muted[3])
                 end)
                 return btn
             end)
-            w:SetWidth(width)
-            w.label:SetText(cat.categoryName)
+            w:SetWidth(cur.w)
+            W.SetFitted(w.label, cat.categoryName or "?", Tab.SLOT_COL - 12)
             local current = cat.slot
-            local text = current and ns.SlotMap:Label(current) or "|cffff8040не определён|r"
-            if cat.override then text = text .. "  |cff60c060(вручную)|r"
-            elseif current then text = text .. "  |cff808080(угадал)|r" end
-            w.value:SetText(text)
+            local c = current and T.text or T.warn
+            w.value:SetTextColor(c[1], c[2], c[3])
+            W.SetFitted(w.value, (current and ns.SlotMap:Label(current) or "не определён")
+                .. (cat.override and " (выбрано вами)" or ""), cur.w - Tab.SLOT_COL)
             local catID = cat.categoryID
             w:SetScript("OnClick", function()
                 local idx = 0
@@ -474,74 +409,37 @@ function Tab:Render()
                 ns.MainFrame:Rebuild(true)
                 Tab:Render()
             end)
-            place(w, 19)
+            place(w, W.STAT_H)
         end
     end
-
     local unmapped = ns.EnchantAdvisor:Unmapped()
     if #unmapped > 0 then
-        note("|cffff8040Не разложил по слотам: " .. #unmapped .. " "
-            .. U.plural(#unmapped, "категорию", "категории", "категорий")
-            .. ". Формулы из них в советы не попадают, пока слот не назначен.|r")
+        note("Без слота: " .. #unmapped .. " "
+            .. U.plural(#unmapped, "категория", "категории", "категорий")
+            .. " чар. Формулы из них в советы не попадают, пока слот не назначен.", "warn")
     end
 
-    -- Client capabilities ----------------------------------------------
-    -- СЛОВАМИ, А НЕ ИМЕНАМИ ФУНКЦИЙ. Здесь стояло «Все вызовы игрового API
-    -- идут через один слой-адаптер», а в строках - перечень внутренних ключей
-    -- («нет: itemStats, tooltipByID»). Игроку из этого раздела нужно одно:
-    -- каких сведений игра аддону не даёт. Имена лежат в файле диагностики.
-    head("Что эта игра мне сообщает")
-    note("Здесь видно, какие сведения эта версия игры мне даёт, а какие нет."
-        .. " Чего она не даёт, то я помечаю как неизвестное — аддон от этого"
-        .. " не ломается.")
-    for _, group in ipairs(ns.Api:Report()) do
-        local text
-        if group.state == "ok" then
-            text = "|cff60c060всё на месте|r"
-        elseif group.state == "none" then
-            text = "|cffff6060игра этого не сообщает|r"
-        else
-            text = "|cffffcc40частично|r — не хватает " .. #group.missing .. " из "
-                .. (#group.missing + #group.ok)
-        end
-        stat(group.group, text)
+    -- Аддоны-помощники -----------------------------------------------------
+    head("Аддоны-помощники")
+    if ns.Api:AuctionatorPresent() then
+        stat("Auctionator", "есть", "good")
+    else
+        stat("Auctionator", "нет — без него не знаю цен", "warn")
     end
-    stat("Это клиент Forever", ns.Api:IsForever() and "да" or "не определил")
-    stat("Локаль", ns.Api:Locale())
-
-    head("Дополнительные аддоны")
-    stat("Auctionator", ns.Api:AuctionatorPresent() and "|cff60c060есть|r"
-        or "|cff808080нет — цены помечаю как неизвестные|r")
-    stat("Syndicator", ns.Api:SyndicatorPresent() and "|cff60c060есть|r"
-        or "|cff808080нет — вижу только свои сумки|r")
-    stat("Кеш рецептов другого аддона", ns.Api:MastercraftDB() and "|cff60c060есть|r"
-        or "|cff808080нет|r")
-    note("Ни один из них не обязателен. Я только читаю их данные, ничего в них"
-        .. " не пишу и ни одной строки их кода не использую.")
+    if ns.Api:SyndicatorPresent() then
+        stat("Syndicator", "есть", "good")
+    else
+        stat("Syndicator", "нет — вижу только свои сумки", "warn")
+    end
 
     -- СВОЯ КНИГА ЗАКУПОК ------------------------------------------------
-    head("Своя книга закупок")
     if ns.Ledger then
+        head("Книга закупок")
         local rep = ns.Ledger:Report()
-        stat("Записей", tostring(rep.entries), (rep.entries > 0) and ns.CONF.EXACT or nil)
+        stat("Записано покупок", tostring(rep.entries))
         stat("Предметов с ценой покупки", tostring(rep.items))
-        if rep.lastT then
-            stat("Последняя запись", U.ageWord(ns.Api:ServerTime() - rep.lastT))
-        else
-            stat("Последняя запись", U.void(ns.VOID.UNKNOWN))
-        end
-        note(ns.Ledger:Headline())
-        note("Я смотрю, как у вас меняются деньги и сумки, когда открыто окно"
-            .. " торговца или аукциона. Если деньги убыли ровно настолько,"
-            .. " насколько прибыл один предмет — это покупка, и цену за штуку я"
-            .. " знаю точно. Если понять однозначно нельзя, я не записываю"
-            .. " ничего: выдуманная себестоимость хуже пустой строки.")
-        for _, gap in ipairs(rep.gaps or {}) do
-            note("|cff808080Чего я не вижу: " .. gap .. ".|r")
-        end
-        if (rep.skipped or 0) > 0 then
-            stat("Отказов сверки", tostring(rep.skipped))
-        end
+        note("Здесь записано, за сколько вы покупали материалы: по этим ценам"
+            .. " точнее считается, ниже какой цены не продавать.")
         -- НЕОБРАТИМОЕ - В ДВА НАЖАТИЯ, тем же приёмом, что у списка покупок.
         button(Tab.ledgerArmed and "Точно стереть книгу — нажмите ещё раз"
             or "Стереть свою книгу закупок", function()
@@ -566,56 +464,21 @@ function Tab:Render()
             ns.MainFrame:Rebuild(true)
             Tab:Render()
         end, 250)
-    else
-        note("Книга закупок не загрузилась.")
     end
 
-    -- ЧУЖАЯ КНИГА: названа чужой, и тут же сказано, что с ней будет.
-    if ns.Api:MastercraftDB() then
-        head("Чужая книга закупок (запасной источник)")
-        stat("Источник", ns.FOREIGN_BOOK.name)
-        note(U.capitalize(ns.FOREIGN_BOOK.why) .. ".")
-        note(U.capitalize(ns.FOREIGN_BOOK.plan) .. ".")
-    end
-
-    -- Price history ----------------------------------------------------
-    head("Своя история цен")
-    local meta = ns.Config:PriceHistoryMeta()
-    stat("Накоплено", (meta.items or 0) .. " предметов, " .. (meta.days or 0) .. " дней")
-    local progress, total = ns.PriceProvider:SnapshotProgress()
-    if progress then
-        stat("Слепок сегодня", progress .. " из " .. total .. " — идёт")
-    else
-        stat("Слепок сегодня", meta.lastWritten and (meta.lastWritten .. " записей") or "ещё не делал")
-    end
-    note("Один раз в сутки я прохожу по вашим реагентам и записываю цену Auctionator."
-        .. " Сервер открылся 4 ноября 2026, истории цен нет ни у кого и собрать её"
-        .. " задним числом нельзя — поэтому копим с первого дня. В этой версии"
-        .. " данные только складываются, выводов по ним я пока не делаю.")
-
-    -- Rules ------------------------------------------------------------
-    head("Чего аддон не делает")
-    note("Не покупает и не продаёт. Не крафтит. Не нажимает ничего за вас."
-        .. " Не обходит защищённые функции и не делает ничего в бою."
-        .. " Только советует — действуете вы.")
-
+    -- Служебное ----------------------------------------------------------
     head("Служебное")
     stat("Версия", ns.VERSION)
-    stat("Пересчётов за сессию", tostring((cfg.stats and cfg.stats.recomputes) or 0))
     button("Пересчитать сейчас", function() ns.MainFrame:Rebuild(true) end)
-    -- Через ту же Card.RestoreHidden, что и кнопка «Вернуть все» на карточке и
-    -- команда /fp show. Раньше здесь чистилась таблица руками: мимо
-    -- Config:ClearDismissed, а значит и мимо очистки lastDismiss — после этой
-    -- кнопки /fp undo отвечал «вернул: ‹карточка›» про уже не скрытую карточку.
-    -- И сообщение было своё, третье по счёту, на одно и то же действие.
+    -- Через ту же Card.RestoreHidden, что и кнопка в шапке списка и команда
+    -- /fp show: одно действие - одно сообщение.
     button("Вернуть все скрытые советы", function()
         ns.Card.RestoreHidden()
     end)
-    -- НЕОБРАТИМОЕ - В ДВА НАЖАТИЯ. Раньше эта кнопка стирала список с одного
-    -- щелчка, прямо отсюда, без вопроса и без слова в ответ. Теперь первое
-    -- нажатие только спрашивает, и кнопка на время вопроса сама меняет
-    -- подпись - игрок, который не читает чат, видит это на ней самой. Решает
-    -- ShoppingList:RequestClear; здесь только слова и перерисовка.
+    -- НЕОБРАТИМОЕ - В ДВА НАЖАТИЯ. Первое нажатие только спрашивает, и кнопка
+    -- на время вопроса сама меняет подпись - игрок, который не читает чат,
+    -- видит это на ней самой. Решает ShoppingList:RequestClear; здесь только
+    -- слова и перерисовка.
     local clearArmed = ns.ShoppingList:ClearArmed()
     button(clearArmed and "Точно очистить — нажмите ещё раз"
         or "Очистить мой список покупок", function()
@@ -635,8 +498,12 @@ function Tab:Render()
             end
         end
     end, 250)
+    note("Файл диагностики со всеми подробностями — команда /fp diag.")
 
-    self.content:SetSize(width, math.max(1, y + 10))
+    local tallest = 0
+    for _, col in ipairs(cols) do tallest = math.max(tallest, col.y) end
+    self.content:SetSize(width, math.max(1, tallest + 10))
+    self.scroll:Refresh()
 end
 
 function Tab:OnShow() Tab:Render() end

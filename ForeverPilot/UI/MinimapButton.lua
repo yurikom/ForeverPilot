@@ -50,7 +50,16 @@ MB.TEXTURE_BORDER    = "Interface\\Minimap\\MiniMap-TrackingBorder"
 MB.TEXTURE_BACKDROP  = "Interface\\Minimap\\UI-Minimap-Background"
 MB.TEXTURE_HIGHLIGHT = "Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight"
 MB.TEXTURE_MASK      = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
-MB.TEXTURE_ICON      = "Interface\\Icons\\INV_Misc_PocketWatch_01"
+-- СВОЙ ЗНАЧОК: золотой бумажный самолётик на ночном небе (Media\Icon.tga,
+-- нарисован для аддона). Игрок попросил «кнопочку на миникарте тоже красивую»
+-- (2026-11-21); до этого стояли карманные часы из игры - тот же значок, что у
+-- совета «настроить».
+--
+-- Новый файл клиент видит только после ПОЛНОГО перезапуска игры, не после
+-- /reload. До тех пор ставится запасной значок из игры (W.SetTextureOr), а не
+-- зелёный квадрат на месте ненайденной текстуры.
+MB.TEXTURE_ICON          = "Interface\\AddOns\\ForeverPilot\\Media\\Icon"
+MB.TEXTURE_ICON_FALLBACK = "Interface\\Icons\\INV_Misc_PocketWatch_01"
 
 -- Геометрия ------------------------------------------------------------
 --
@@ -155,14 +164,21 @@ function MB:Apply()
 
     local icon = btn:CreateTexture(nil, "ARTWORK")
     self.icon = icon
-    icon:SetTexture(MB.TEXTURE_ICON)
+    local own = ns.Widgets.SetTextureOr(icon, MB.TEXTURE_ICON, MB.TEXTURE_ICON_FALLBACK)
+    self.ownIcon = own
     icon:SetSize(MB.ICON_SIZE, MB.ICON_SIZE)
     -- Не по центру кнопки: центр кольца в этой текстуре смещён, и иконка
     -- ставится по нему, иначе она съезжает вниз-вправо.
     icon:SetPoint("TOPLEFT", btn, "TOPLEFT",
         MB.ICON_OFFSET[1], MB.ICON_OFFSET[2])
     -- Обрезаем квадратную иконку, чтобы её углы не выпирали из кольца.
-    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    -- У игровых значков по краю рамка, её срезаем. Свой нарисован круглым и
+    -- без рамки - он идёт целиком.
+    if own then
+        icon:SetTexCoord(0, 1, 0, 1)
+    else
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end
     -- А если клиент умеет маски - делаем её по-настоящему круглой. Умеет не
     -- каждый, поэтому через проверку: без маски обрезки выше уже достаточно.
     if type(icon.SetMask) == "function" then

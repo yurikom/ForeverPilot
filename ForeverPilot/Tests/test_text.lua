@@ -231,9 +231,6 @@ end
 -- Слова в кавычках, которые не элементы и не данные, а ТЕРМИНЫ: текст их
 -- объясняет, а не просит нажать. Каждому - причина, почему он здесь.
 local QUOTED_TERMS = {
-    ["купить готовый"] = "вкладка «Крафт» объясняет, как принимается решение по"
-        .. " промежуточному материалу",
-    ["скрафтить промежуточный материал"] = "то же объяснение, второй вариант решения",
     ["сила"] = "настройки: «это НЕ характеристика „сила“» - слово, с которым не"
         .. " надо путать балл пользы",
     -- Строка «порог убрал N денежных советов» называет раздел настроек, где
@@ -546,8 +543,8 @@ do
 
     -- Все переходы, включая «налево» - именно на них старый проход оставлял
     -- текущую вкладку висеть, потому что до неё цикл уже не доходил.
-    local order = { "NOW", "CHAR", "CRAFT", "CONFIG", "NOW", "CONFIG", "CHAR",
-                    "NOW", "CRAFT", "CHAR", "CONFIG", "CRAFT" }
+    local order = { "NOW", "CRAFT", "CONFIG", "NOW", "CONFIG", "CRAFT",
+                    "NOW", "CRAFT", "CONFIG", "CRAFT" }
     for _, key in ipairs(order) do
         local ok, err = pcall(function() ns.MainFrame:Select(key) end)
         H.ok(ok, "переключение на «" .. key .. "» не падает", tostring(err))
@@ -567,7 +564,7 @@ do
     local env = fresh()
     local ns = env.ns
     ns.MainFrame:Build()
-    for _, key in ipairs({ "CONFIG", "NOW", "CHAR", "NOW", "CRAFT" }) do
+    for _, key in ipairs({ "CONFIG", "NOW", "CRAFT", "NOW", "CRAFT" }) do
         local btn = ns.MainFrame.tabButtons[key]
         local handler = btn and btn.__scripts and btn.__scripts.OnClick
         H.ok(handler ~= nil, "у вкладки «" .. key .. "» есть обработчик щелчка")
@@ -588,7 +585,7 @@ do
     -- ВОСПРОИЗВЕДЕНИЕ ТОГО, ЧТО ВИДЕЛ ИГРОК, но без первопричины: движок на
     -- месте, а отрисовка одной вкладки сломана намеренно. Это и есть настоящий
     -- инвариант - переключение не имеет права зависеть от отрисовки.
-    for _, broken in ipairs({ "NOW", "CHAR", "CRAFT", "CONFIG" }) do
+    for _, broken in ipairs({ "NOW", "CRAFT", "CONFIG" }) do
         local env = fresh()
         local ns = env.ns
         ns.MainFrame:Build()
@@ -606,7 +603,7 @@ do
 
             -- Проходим по всем вкладкам: сломанная встречается и «справа», и
             -- «слева» от предыдущей.
-            for _, key in ipairs({ "NOW", "CHAR", "CRAFT", "CONFIG", "NOW" }) do
+            for _, key in ipairs({ "NOW", "CRAFT", "CONFIG", "NOW" }) do
                 local ok = pcall(function() ns.MainFrame:Select(key) end)
                 H.ok(ok, "Select(«" .. key .. "») не выпускает ошибку наружу"
                     .. " (сломана «" .. broken .. "»)")
@@ -638,7 +635,7 @@ do
     local ns = env.ns
     ns.MainFrame:Build()
     ns.ActionEngine = nil
-    for _, key in ipairs({ "NOW", "CHAR", "CONFIG", "NOW", "CRAFT" }) do
+    for _, key in ipairs({ "NOW", "CRAFT", "CONFIG", "NOW", "CRAFT" }) do
         local ok = pcall(function() ns.MainFrame:Select(key) end)
         H.ok(ok, "без движка Select(«" .. key .. "») не выпускает ошибку наружу")
         local shown, selected = tabState(ns)
@@ -1655,7 +1652,7 @@ do
     ns.StepPanel:Build()
     ns.Config:Get().panel.pos = { 640, 480 }
     ns.StepPanel:ApplyPosition()
-    ns.Config:SaveFrame("TOPLEFT", "TOPLEFT", 150, -90, 820, 620)
+    ns.Config:SaveFrame("TOPLEFT", "TOPLEFT", 150, -90, 920, 620)
     ns.Config:SetScale(1.15)
     ns.Config:Get().ui.minimapAngle = 42
     ns.Config:Get().tab = "CRAFT"
@@ -1674,7 +1671,7 @@ do
     local ui = ns2.Config:Frame()
     H.eq(ui.point, "TOPLEFT", "точка привязки окна сохранилась")
     H.eq(ui.x, 150, "x окна сохранился")
-    H.eq(ui.width, 820, "ширина окна сохранилась")
+    H.eq(ui.width, 920, "ширина окна сохранилась")
     H.eq(ui.height, 620, "высота окна сохранилась")
     H.near(ns2.Config:Scale(), 1.15, 0.001, "масштаб сохранился")
     H.eq(ns2.Config:MinimapAngle(), 42, "угол кнопки у миникарты сохранился")
@@ -1684,7 +1681,7 @@ do
         "позиция панели сохранилась")
 
     -- И окно действительно получило сохранённый размер, а не дефолтный.
-    H.eq(ns2.MainFrame.frame:GetWidth(), 820, "окно построено сохранённой ширины")
+    H.eq(ns2.MainFrame.frame:GetWidth(), 920, "окно построено сохранённой ширины")
     H.eq(ns2.MainFrame.frame:GetHeight(), 620, "и сохранённой высоты")
 end
 
@@ -1785,7 +1782,7 @@ do
             place = { mapID = 1434, x = 0.3, y = 0.4, routable = true },
         })
         local right = f.action:IsShown() and f.action or f.next
-        local used = 18 + (f.badge:GetWidth() or 0) + (right:GetWidth() or 0) + 14
+        local used = ns.StepPanel.ROW_PAD + (right:GetWidth() or 0) + ns.StepPanel.ROW_GAP
         if f.route:IsShown() then used = used + (f.route:GetWidth() or 0) end
         return used, f.route:IsShown()
     end
@@ -1799,11 +1796,12 @@ do
         end
     end
 
-    -- И значок достоверности с кнопкой действия не уступают никогда: без
-    -- первого аддон перестаёт честно говорить, чего он не знает.
+    -- Кнопка действия не уступает никогда: ради неё панель и существует.
+    -- (Значка достоверности на панели больше нет: игрок назвал его лишним,
+    -- 2026-11-21.)
     fits(220, "В список покупок")
-    H.eq(f.badge:IsShown(), true, "значок достоверности остаётся на самой узкой панели")
-    H.eq(f.action:IsShown(), true, "и кнопка действия тоже")
+    H.eq(f.badge, nil, "значка достоверности на панели нет")
+    H.eq(f.action:IsShown(), true, "кнопка действия остаётся на самой узкой панели")
     cfg.panel.width = 300
     ns.StepPanel:ApplySize()
 end
@@ -2329,7 +2327,7 @@ do
         "у состояния «" .. stateName .. "» есть строка под списком покупок")
     local sawHandoff, sawPaged = false, false
     for _, scr in ipairs(CORPUS.screens) do
-        if scr.where == stateName .. " / окно / Крафт" then
+        if scr.where == stateName .. " / окно / Покупки" then
             for _, text in ipairs(scr.texts) do
                 if handoff and S.plain(text) == S.plain(handoff) then sawHandoff = true end
             end
@@ -2342,7 +2340,7 @@ do
     -- иначе проверка ниже смотрела бы на тексты про кнопку без самой кнопки.
     local sawButton = false
     for _, scr in ipairs(CORPUS.screens) do
-        if scr.where == "аукцион открыт, список можно передать / окно / Крафт" then
+        if scr.where == "аукцион открыт, список можно передать / окно / Покупки" then
             for _, label in ipairs(scr.labels) do
                 if S.plain(label) == "Искать на аукционе" then sawButton = true end
             end

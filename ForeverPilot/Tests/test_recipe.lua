@@ -200,7 +200,8 @@ do
 
     local drawn = 0
     for _, row in ipairs(rows) do
-        if row.action.__shown then drawn = drawn + 1 end
+        -- Кнопка действия - в карточке справа: щелчок по строке её открывает.
+        if S.actionOf(ns, row) then drawn = drawn + 1 end
     end
     H.eq(drawn, 0, "ни у одного такого совета кнопка не нарисована")
     H.eq(recipeLabelsOnScreen(env), 0,
@@ -237,7 +238,8 @@ do
     -- 2. Нажатие «призрака»: кнопка скрыта, но обработчик у неё остался с
     --    прошлой отрисовки. Нажать его нельзя, а вызвать можно.
     for _, row in ipairs(rows) do
-        local ok, err = press(row.action)
+        S.pick(ns, row)
+        local ok, err = press(ns.Detail.action)
         H.ok(ok, "обработчик скрытой кнопки не падает", tostring(err))
     end
     H.eq(calls(env), 0, "обработчик скрытой кнопки до клиента не дошёл")
@@ -291,7 +293,7 @@ do
         H.eq(recipeLabelsOnScreen(env), 0, case.name .. ": подписей на экране нет")
         local rows = recipeRows(env)
         H.ok(#rows > 0, case.name .. ": советы с рецептом есть")
-        for _, row in ipairs(rows) do press(row, "LeftButton"); press(row.action) end
+        for _, row in ipairs(rows) do press(row, "LeftButton"); press(ns.Detail.action) end
         H.eq(calls(env), 0, case.name .. ": клиент не зовётся")
         H.eq(errorCount(env), 0, case.name .. ": ошибок в диагностике нет")
     end
@@ -325,27 +327,40 @@ do
     H.eq(ns.RecipeBook:FindText(999999), nil, "про незнакомый рецепт — ничего")
     H.eq(ns.RecipeBook:FindText(nil), nil, "и без номера — тоже ничего")
 
-    -- ЭТА СТРОКА СТОИТ ТАМ, ГДЕ НЕ ХВАТАЕТ КНОПКИ: в подсказке совета.
+    -- ЭТА СТРОКА СТОИТ ТАМ, ГДЕ НЕ ХВАТАЕТ КНОПКИ: в карточке совета справа.
+    -- Под курсором у строки списка совет больше не пересказывается: там
+    -- подсказка самого предмета, как в игре (игрок назвал пересказ с
+    -- «достоверностью» и «местом в списке» лишним, 2026-11-21).
     local rows = recipeRows(env)
     local tip = tipLines(env, rows[1])
     local own = ns.RecipeBook:FindText(rows[1].card.action.recipeID)
     H.ok(own ~= nil, "у этого совета есть своя строка про его рецепт")
-    H.ok(tip:find(S.plain(own), 1, true) ~= nil,
-        "и она в подсказке именно этого совета: " .. tostring(own))
-    H.ok(tip:find("Достоверность", 1, true) ~= nil,
-        "и то, что про сам совет, в подсказке осталось")
+    H.eq(tip:find("Достоверность", 1, true), nil,
+        "пересказа совета в подсказке строки нет")
 
-    -- А длинного объяснения в подсказке нет: игрок прислал скриншот, где оно
+    -- И длинного объяснения в подсказке нет: игрок прислал скриншот, где оно
     -- занимало пять строк поверх игровых данных о предмете.
     H.eq(tip:find(S.plain(ns.RecipeBook.NOTE), 1, true), nil,
         "длинного объяснения в подсказке совета нет")
 
-    -- Щелчок по совету говорит то же самое, и ровно одной строкой.
+    -- ЩЕЛЧОК ПО СОВЕТУ ОТКРЫВАЕТ ЕГО КАРТОЧКУ, И ТАМ НА МЕСТЕ КНОПКИ - ТА ЖЕ
+    -- СТРОКА. В чат при этом ничего не пишется: ответ стоит на экране, рядом с
+    -- советом, а не уезжает вверх вместе с чатом.
     env.said = {}
     press(rows[1], "LeftButton")
-    H.eq(#env.said, 1, "щелчок отвечает одной строкой")
-    H.ok(S.plain(env.said[1] or ""):find(S.plain(own), 1, true) ~= nil,
-        "и это та же строка, что в подсказке: " .. tostring(env.said[1]))
+    H.eq(#env.said, 0, "щелчок в чат ничего не пишет")
+    local detail = ns.Detail
+    H.eq(detail.card, rows[1].card, "совет открыт в карточке справа")
+    H.eq(detail.action.__shown, false, "кнопки действия в карточке нет")
+    H.eq(detail.note.__shown, true, "на её месте стоит строка")
+    -- (Без оговорки «окон игры я не открываю»: что сделать, сказано, а чего
+    -- аддон не делает, игроку здесь знать незачем.)
+    local ownShort = ns.Util.essence(S.plain(own), 2)
+    H.ok(#ownShort > 20 and S.plain(detail.note:GetText() or ""):find(ownShort, 1, true) ~= nil,
+        "и это строка про его рецепт: " .. tostring(detail.note:GetText()))
+    H.ok(ownShort:find(rows[1].card.action and ns.RecipeBook:Get(rows[1].card.action.recipeID)
+        and ns.RecipeBook:Get(rows[1].card.action.recipeID).name or "\0", 1, true) ~= nil,
+        "с названием рецепта")
 end
 
 H.suite("Рецепт: своя строка у КАЖДОГО такого совета, а не только у первого")
@@ -368,8 +383,12 @@ do
             "«" .. title .. "»: кнопка не рисуется")
         H.eq(ns.StepPanel.HasOwnAction(card), false,
             "«" .. title .. "»: и на панели своей кнопки нет")
-        H.ok(tipLines(env, row):find(S.plain(short), 1, true) ~= nil,
-            "«" .. title .. "»: и строка стоит в подсказке этого совета")
+        press(row, "LeftButton")
+        H.eq(ns.Detail.card, card, "«" .. title .. "»: совет открыт в карточке справа")
+        local shortShown = ns.Util.essence(S.plain(short), 2)
+        H.ok(ns.Detail.note.__shown and #shortShown > 20
+            and S.plain(ns.Detail.note:GetText() or ""):find(shortShown, 1, true) ~= nil,
+            "«" .. title .. "»: и строка стоит в его карточке, на месте кнопки")
     end
     H.eq(calls(env), 0, "и за весь обход клиент не тронут")
 end
