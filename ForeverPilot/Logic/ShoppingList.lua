@@ -461,6 +461,79 @@ function Shopping:Handoff()
 end
 
 -- Состояние и текст под списком - для вызывающих, которым хватает двух значений.
+-- ПОИСК НА АУКЦИОНЕ ПРЯМО С СОВЕТА -----------------------------------------
+--
+-- Жалоба игрока (2026-11-21): на совете «Купить: Золотая жемчужина» и на
+-- совете «Скрафтить: …» с нехваткой материалов нет кнопки, которая искала бы
+-- это на аукционе, - надо идти во вкладку «Крафт» или набирать имя руками.
+-- Путь тот же, что у кнопки под списком покупок (Api:AuctionatorSearchItems),
+-- только позиции берутся у одного совета.
+
+-- Можно ли искать прямо сейчас: Auctionator с поиском списком, аукцион открыт,
+-- вкладка покупок есть, прошлая передача не ломалась, боя нет.
+function Shopping:CanSearchNow()
+    if Shopping.handoffBroken then return false end
+    if Api:InCombat() then return false end
+    if not Api:AuctionatorPresent() then return false end
+    if not Api:AuctionatorSearchRoute() then return false end
+    if not Api:AuctionHouseOpen() then return false end
+    if not Api:AuctionatorShoppingTab() then return false end
+    return true
+end
+
+-- Что у этого совета есть смысл искать на аукционе: сам предмет (совет
+-- «Купить») или материалы, которых не хватает (совет с планом крафта).
+-- Позиции, которые дешевле у торговца, без настоящего имени или с именем,
+-- которое Auctionator отвергает, в поиск не идут - как и под списком покупок.
+function Shopping:CardAuctionItems(card)
+    local items = {}
+    if type(card) ~= "table" then return items end
+    local function take(itemID, name, qty, src, buyable)
+        qty = tonumber(qty) or 0
+        if qty <= 0 or buyable == false or src == "vendor" then return end
+        if type(name) ~= "string" or name == "" then return end
+        if name == U.itemFallbackName(itemID) then return end
+        if not Api:AuctionatorNameOk(name) then return end
+        items[#items + 1] = { itemID = itemID, name = name, qty = qty }
+    end
+    local act = card.action
+    if act and act.kind == "shop" and act.itemID then
+        local price = card.matPrice or {}
+        take(act.itemID, card.buyName or ns.ActionEngine.nameOf(act.itemID),
+            act.qty or card.buyQty, price.src, nil)
+    elseif card.plan and type(card.plan.shopping) == "table" then
+        for _, line in ipairs(card.plan.shopping) do
+            take(line.itemID, ns.ActionEngine.nameOf(line.itemID), line.qty,
+                line.src, line.buyable)
+        end
+    end
+    return items
+end
+
+-- Нажатие кнопки на совете. Возвращает ok и одну строку для игрока.
+function Shopping:SearchCard(card)
+    if not self:CanSearchNow() then
+        return false, "искать на аукционе сейчас нечем: аукцион закрыт или"
+            .. " Auctionator поиск не принимает"
+    end
+    local items = self:CardAuctionItems(card)
+    if #items == 0 then return false, "искать на аукционе по этому совету нечего" end
+    local ok, route, detail = Api:AuctionatorSearchItems(items)
+    if ok then
+        return true, "передал в поиск Auctionator: " .. #items .. " "
+            .. U.plural(#items, "позиция", "позиции", "позиций")
+            .. ". Покупаете вы сами."
+    end
+    Shopping.handoffBroken = { reason = route, error = detail }
+    if ns.Diag then
+        ns.Diag:Log("Auctionator не принял поиск с совета", {
+            reason = route, error = detail, items = #items,
+        })
+    end
+    return false, "Auctionator не принял поиск — ищите на аукционе по названиям."
+        .. " Подробности записал в /fp diag."
+end
+
 function Shopping:HandoffState()
     local info = self:Handoff()
     return info.state, info.note, info

@@ -614,6 +614,9 @@ local LABEL_ACTION = {
     ["Показать предмет"] = "showItem", ["В список покупок"] = "shop",
     ["Вернуть все"] = "undismiss", ["Понятно"] = "openProfession",
     ["Убрать из списка"] = "unpin",
+    -- Подписи, которые зависят от того, что открыто (Card.LiveAction).
+    ["Искать на аукционе"] = "auction",
+    ["Показать в профессии"] = "showRecipe", ["Вернуть весь список"] = "showRecipe",
 }
 
 -- Слова, которыми кнопка «показать» отвечать не должна: это ответ на другой
@@ -638,6 +641,28 @@ CONTRACT.findRecipe = function(p)
     if p.recipeCalls ~= 0 then
         return false, "клиент позван " .. p.recipeCalls .. " раз, а звать его нельзя"
     end
+    return true
+end
+
+-- Искать на аукционе (кнопка на самом совете): одна строка, и в ней либо
+-- «передал в поиск», либо причина, почему нет. Список покупок при этом не
+-- меняется: искать - не закреплять.
+CONTRACT.auction = function(p)
+    if #p.said ~= 1 then return false, "строк в чате " .. #p.said .. " вместо одной" end
+    local line = Sense.lower(p.said[1])
+    if line:find("передал в поиск", 1, true) then return true end
+    if line:find("не принял", 1, true) or line:find("нечем", 1, true)
+        or line:find("нечего", 1, true) then return true end
+    return false, "нажали «искать», а ответ ни про поиск, ни про отказ: " .. p.said[1]
+end
+
+-- Показать в профессии: одна строка с именем рецепта, и запрещённый вызов
+-- открытия окна не сделан ни разу.
+CONTRACT.showRecipe = function(p)
+    if p.recipeCalls ~= 0 then
+        return false, "клиент позван открыть рецепт " .. p.recipeCalls .. " раз, а звать его нельзя"
+    end
+    if #p.said ~= 1 then return false, "строк в чате " .. #p.said .. " вместо одной" end
     return true
 end
 

@@ -76,6 +76,11 @@ function Api:Detect()
         -- есть - в диагностике игрока она числилась доступной, - но она
         -- защищённая: вызов из аддона игра блокирует и обвиняет аддон. Почему
         -- её нет даже в проверке наличия, написано ниже, у Items.
+        -- Поиск по имени в окне профессии: не открывает окно, а сужает список
+        -- в уже открытом (Api:SetRecipeNameFilter). Здесь - только чтобы в
+        -- файле диагностики было видно, есть ли функции на клиенте.
+        recipeNameFilter    = "C_TradeSkillUI.SetRecipeItemNameFilter",
+        recipeNameFilterGet = "C_TradeSkillUI.GetRecipeItemNameFilter",
         isTradeLinked    = "C_TradeSkillUI.IsTradeSkillLinked",
         isTradeGuild     = "C_TradeSkillUI.IsTradeSkillGuild",
         invItemLink      = "GetInventoryItemLink",
@@ -819,6 +824,52 @@ end
 -- (закрытый перечень защищённых вызовов): ИМЕНИ ЭТОЙ ФУНКЦИИ В КОДЕ АДДОНА НЕТ
 -- ВОВСЕ - ни вызова, ни проверки наличия. Аддон советник: что нажать самому,
 -- он говорит СЛОВАМИ (Logic/RecipeBook.lua, RecipeBook:FindText).
+
+-- ЧТО ВМЕСТО ЭТОГО МОЖНО: СУЗИТЬ СПИСОК В ОКНЕ, КОТОРОЕ ИГРОК ОТКРЫЛ САМ.
+--
+-- Жалоба игрока (2026-11-21): «я просто на это смотрю и должен ручками вбивать
+-- название в профессии». Открыть окно аддону нельзя, но у окна профессии есть
+-- поиск по имени, и поставить его текст - не защищённое действие: это та же
+-- функция, которую зовёт поле поиска самого окна. Она ничего не открывает, не
+-- крафтит и не выбирает; она оставляет в списке рецепты с таким именем.
+--
+-- Функция берётся у клиента в момент вызова и только через pcall. Если игра
+-- всё-таки заблокирует вызов, это увидит Events:OnActionBlocked и выключит
+-- кнопку насовсем (RecipeBook.filterBroken) - второй раз игрок окно про
+-- блокировку не увидит.
+local function tradeSkillFn(name)
+    local C = _G.C_TradeSkillUI
+    local fn = type(C) == "table" and C[name] or nil
+    return (type(fn) == "function") and fn or nil
+end
+
+function Api:CanFilterRecipes()
+    return tradeSkillFn("SetRecipeItemNameFilter") ~= nil
+end
+
+-- Текст поиска в окне профессии; nil - спросить нечем.
+function Api:RecipeNameFilter()
+    local fn = tradeSkillFn("GetRecipeItemNameFilter")
+    if not fn then return nil end
+    local ok, text = pcall(fn)
+    if ok and type(text) == "string" then return text end
+    return nil
+end
+
+-- true или false + причина словом: no-api, combat, error.
+function Api:SetRecipeNameFilter(text)
+    local fn = tradeSkillFn("SetRecipeItemNameFilter")
+    if not fn then return false, "no-api" end
+    if Api:InCombat() then return false, "combat" end
+    local ok, err = pcall(fn, text or "")
+    if ns.Diag then
+        ns.Diag:Call("C_TradeSkillUI.SetRecipeItemNameFilter", ok,
+            ok and ((text and text ~= "") and "поиск поставлен" or "поиск снят")
+                or tostring(err))
+    end
+    if not ok then return false, "error", tostring(err) end
+    return true
+end
 
 -- Items ------------------------------------------------------------------
 

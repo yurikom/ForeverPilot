@@ -907,6 +907,13 @@ function C.build(H, S, opts)
         for _, row in ipairs(targets) do
             local card = row.card
             local act = card.action or {}
+            -- ЧТО НА КНОПКЕ НАПИСАНО И ЧТО ОНА ДЕЛАЕТ - СПРАШИВАЕМ ДО НАЖАТИЯ.
+            -- Подпись и действие у совета теперь зависят от того, что открыто
+            -- (аукцион, окно профессии): Card.LiveAction. Договор проверяется
+            -- по тому, что было на кнопке в момент нажатия.
+            local live = nsr.Card.LiveAction and nsr.Card.LiveAction(card) or nil
+            local liveKind = (live and live.kind) or act.kind
+            local liveLabel = (live and live.label) or act.label
             env.said = {}
             nsr.Api.lastSaid = nil            -- каждое нажатие слушаем с чистого листа
             local before = C.signature(env, S)
@@ -938,7 +945,7 @@ function C.build(H, S, opts)
                     .. "» у совета «" .. tostring(card.title) .. "»", card)
             end
             corpus.presses[#corpus.presses + 1] = {
-                state = state.name, card = card, kind = act.kind, label = act.label,
+                state = state.name, card = card, kind = liveKind, label = liveLabel,
                 drawn = shown and true or false, pressed = handler ~= nil,
                 ok = ok, err = err, said = said, raw = env.said,
                 changed = C.signature(env, S) ~= before,

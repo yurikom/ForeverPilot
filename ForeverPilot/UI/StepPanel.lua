@@ -647,7 +647,7 @@ function Panel:RenderCard(card)
     local hasOwnAction = Panel.HasOwnAction(card)
     local right = f.action
     right:Show()
-    right:SetLabel(hasOwnAction and card.action.label or "Открыть")
+    right:SetLabel(hasOwnAction and ns.Card.ActionLabel(card) or "Открыть")
     self:UpdateHeader(card)
     -- Ширина по подписи: «Дальше» и «В список покупок» разной длины, а
     -- обрезанная подпись - это снова текст, который врёт о том, что видно.

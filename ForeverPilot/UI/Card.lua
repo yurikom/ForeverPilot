@@ -325,12 +325,79 @@ end
 -- дефект, что текст про кнопку, которой нет. Поэтому её нет вовсе, а на
 -- экране стоит то, что игроку и нужно: какую профессию открыть и что в ней
 -- найти (в подсказке совета, над списком и в подсказке панели).
+--
+-- С 2026-11-21 У РЕЦЕПТА КНОПКА БЫВАЕТ, И У ЛЮБОГО СОВЕТА ОНА ЗАВИСИТ ОТ ТОГО,
+-- ЧТО СЕЙЧАС ОТКРЫТО. Жалоба игрока: «я просто на это смотрю и должен ручками
+-- вбивать название в профессии… или искать на аукционе кнопочку вставить».
+-- Что нажимается на совете прямо сейчас, решает одна функция - Card.LiveAction,
+-- - и по ней же ставится подпись, и по ней же идёт нажатие: иначе кнопка
+-- подписана одним, а делает другое.
+--   * открыт аукцион и совету есть что на нём искать (сам предмет или
+--     материалы, которых не хватает) - «Искать на аукционе»;
+--   * совет про рецепт и клиент умеет искать по имени в окне профессии -
+--     «Показать в профессии» (окно при этом открывает игрок);
+--   * иначе - своё действие совета, как раньше.
+-- nil - нажимать нечего, и кнопки нет.
+function Card.LiveAction(card)
+    local act = card and card.action
+    if not act or act.kind == "noop" then return nil end
+
+    if ns.ShoppingList and ns.ShoppingList.CanSearchNow
+        and (act.kind == "shop" or act.kind == "findRecipe")
+        and ns.ShoppingList:CanSearchNow() then
+        local items = ns.ShoppingList:CardAuctionItems(card)
+        if #items > 0 then
+            return { kind = "auction", label = ns.ShoppingList.HANDOFF_LABEL, items = items }
+        end
+    end
+
+    if act.kind == "findRecipe" then
+        local info = ns.RecipeBook:ShowState(act.recipeID)
+        if info.state == "ready" then
+            return { kind = "showRecipe", label = info.label, recipeID = act.recipeID,
+                     shown = info.shown, armed = info.armed }
+        end
+        return nil
+    end
+    return { kind = act.kind, label = act.label or "Открыть" }
+end
+
 function Card.ActionReady(card)
     local act = card and card.action
     if not act then return true end
-    if act.kind == "noop" then return false end
-    if act.kind == "findRecipe" then return ns.RecipeBook:CanShow() end
-    return true
+    return Card.LiveAction(card) ~= nil
+end
+
+-- Подпись кнопки - та, что сейчас нажимается.
+function Card.ActionLabel(card)
+    local live = Card.LiveAction(card)
+    if live and live.label then return live.label end
+    return (card and card.action and card.action.label) or "Открыть"
+end
+
+-- Подсказка кнопки: что она сделает и чего не сделает. nil - сказать нечего.
+function Card.ActionTip(card)
+    local live = Card.LiveAction(card)
+    if not live then return nil end
+    if live.kind == "auction" then
+        return live.label, {
+            "Открою вкладку покупок Auctionator и запущу в ней поиск: "
+                .. #live.items .. " "
+                .. U.plural(#live.items, "позиция", "позиции", "позиций") .. ".",
+            "Ничего не покупаю — дальше действуете вы.",
+        }
+    end
+    if live.kind == "showRecipe" then
+        if live.shown then
+            return live.label, { "Сниму поиск в окне профессии — вернётся весь список." }
+        end
+        return live.label, {
+            "Профессия открыта — оставлю в её списке только этот рецепт.",
+            "Закрыта — запомню: откройте её сами, и рецепт уже будет найден.",
+            "Окон игры я не открываю и ничего не создаю.",
+        }
+    end
+    return nil
 end
 
 -- Почему у совета нет кнопки. nil - кнопка есть или объяснять нечего.
@@ -347,7 +414,10 @@ function Card.ActionNote(card)
     end
     local act = card and card.action
     if act and act.kind == "findRecipe" then
-        local info = ns.RecipeBook:ShowState()
+        -- Кнопка есть (показ в профессии или поиск на аукционе) - объяснять
+        -- её отсутствие незачем.
+        if Card.LiveAction(card) then return nil end
+        local info = ns.RecipeBook:ShowState(act.recipeID)
         if info.state ~= "ready" then return info.note end
     end
     return nil
@@ -370,7 +440,8 @@ end
 function Card.ActionNoteShort(card)
     local act = card and card.action
     if act and act.kind == "findRecipe" then
-        local info = ns.RecipeBook:ShowState()
+        if Card.LiveAction(card) then return nil end
+        local info = ns.RecipeBook:ShowState(act.recipeID)
         if info.state ~= "ready" then
             return ns.RecipeBook:FindText(act.recipeID) or info.short
         end
@@ -417,9 +488,21 @@ function Card.Fill(frame, card)
     frame.meter:SetValue(card.plan and card.plan.readiness or (card.pinTop and 0 or 1))
     if card.plan then frame.meter:Show() else frame.meter:Hide() end
 
-    local label = (card.action and card.action.label) or "Открыть"
+    local label = Card.ActionLabel(card)
     frame.action:SetLabel(label)
     frame.action:SetScript("OnClick", function() Card.Activate(card) end)
+    -- Подсказка кнопки: что именно она сделает сейчас. Подпись у кнопки одна, а
+    -- дел у неё три (свой совет, аукцион, профессия) - без подсказки непонятно,
+    -- почему она то одна, то другая.
+    frame.action:SetScript("OnEnter", function(self)
+        self.fpBG:SetColorTexture(0.22, 0.34, 0.55, 0.95)
+        local title, body = Card.ActionTip(card)
+        if title then W.ShowTip(self, title, body) end
+    end)
+    frame.action:SetScript("OnLeave", function(self)
+        self.fpBG:SetColorTexture(0.14, 0.16, 0.22, 0.95)
+        W.HideTip()
+    end)
     local showAction = not (card.action and card.action.kind == "noop")
         and Card.ActionReady(card)
     if showAction then frame.action:Show() else frame.action:Hide() end
@@ -514,11 +597,27 @@ function Card.ActivateInner(card)
     if not card or not card.action then return end
     local act = card.action
 
+    -- ЧТО НАЖАТО - РЕШАЕТ Card.LiveAction, ТА ЖЕ, ЧТО ПОДПИСАЛА КНОПКУ.
+    local live = Card.LiveAction(card)
+
+    if live and live.kind == "auction" then
+        local _, message = ns.ShoppingList:SearchCard(card)
+        if message then ns.Api:Print(message) end
+        ns.MainFrame:Refresh()
+        return
+    end
+
     if act.kind == "findRecipe" then
-        -- КЛИЕНТ ЗДЕСЬ НЕ ЗОВЁТСЯ ВОВСЕ. Открыть рецепт в окне профессий игра
-        -- аддонам запрещает (Core/Api.lua), поэтому кнопки у совета нет, а
-        -- щелчок по самой карточке отвечает тем, что игроку и нужно: где этот
-        -- рецепт искать. Одной строкой и без чужих окон.
+        -- ОКНО ПРОФЕССИЙ ЗДЕСЬ НЕ ОТКРЫВАЕТСЯ. Открыть рецепт игра аддонам
+        -- запрещает (Core/Api.lua). Если клиент умеет искать по имени, в окне,
+        -- которое открыл игрок, остаётся один этот рецепт (RecipeBook:Show);
+        -- если нет - одной строкой сказано, что открыть и что найти.
+        if live and live.kind == "showRecipe" then
+            local _, message = ns.RecipeBook:Show(act.recipeID)
+            if message then ns.Api:Print(message) end
+            ns.MainFrame:Refresh()
+            return
+        end
         ns.Api:Print(ns.RecipeBook:FindText(act.recipeID)
             or ns.RecipeBook:ShowState().note)
         return

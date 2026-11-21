@@ -577,6 +577,16 @@ function Main:Refresh()
     if ns.StepPanel then ns.StepPanel:Refresh() end
 end
 
+-- Перерисовать, только если есть кому смотреть. Нужен событиям, которые
+-- меняют подписи кнопок (открыли аукцион, открыли профессию), а пересчёта не
+-- требуют: при закрытом окне рисовать нечего.
+function Main:RefreshIfShown()
+    if not self:AnyoneWatching() then return false end
+    if ns.Api:InCombat() then return false end
+    self:Refresh()
+    return true
+end
+
 -- Rebuild the card list without rescanning the character.
 --
 -- Hiding a card changes which cards the engine may emit and nothing else: not

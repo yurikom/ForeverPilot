@@ -227,6 +227,20 @@ local function initialize()
     ns.Events:On("combat", function(inCombat)
         ns.MainFrame:OnCombat(inCombat)
     end)
+    -- Окно профессии открыли, обновили или закрыли: книга рецептов ставит
+    -- обещанный поиск, а кнопки на советах меняют подпись.
+    ns.Events:On("tradeskill", function(phase)
+        local message, changed = ns.RecipeBook:OnTradeSkill(phase)
+        if message then Api:Print(message) end
+        if changed and ns.MainFrame.RefreshIfShown then ns.MainFrame:RefreshIfShown() end
+    end)
+    -- Аукцион открыли или закрыли: на советах появляется или пропадает кнопка
+    -- «Искать на аукционе». Пересчёт для этого не нужен - только перерисовка.
+    ns.Events:On("auction", function(what)
+        if (what == "open" or what == "close") and ns.MainFrame.RefreshIfShown then
+            ns.MainFrame:RefreshIfShown()
+        end
+    end)
     ns.Events:On("merchant", function(phase)
         -- Закрытое окно читать нечего: фаза «close» нужна книге закупок, а не
         -- чтению цен. Без этой проверки каждое закрытие торговца запускало бы

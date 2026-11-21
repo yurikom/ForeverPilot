@@ -349,6 +349,13 @@ Events.blockedTold = 0
 function Events:OnActionBlocked(event, addon, func)
     if tostring(addon) ~= ADDON then return false end
     local what = tostring(func or "неизвестный вызов")
+    -- Поиск в окне профессии - единственный вызов, который трогает чужое окно.
+    -- Заблокировали - выключаем кнопку насовсем, и после перезагрузки тоже.
+    if what:find("SetRecipeItemNameFilter", 1, true) then
+        if ns.RecipeBook then ns.RecipeBook.filterBroken = { blocked = true } end
+        local cfg = ns.Config and ns.Config.Get and ns.Config:Get() or nil
+        if cfg then cfg.recipeFilterBlocked = true end
+    end
     if ns.Diag then
         ns.Diag:Count("blocked." .. what)
         ns.Diag:Log("игра заблокировала вызов аддона", {
@@ -461,6 +468,17 @@ function Events:OnEvent(event, ...)
                 (event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW") and "open" or "close")
         end
         return
+    end
+
+    -- Окно профессии: отдельным сигналом, без ожидания пересчёта. По нему
+    -- книга рецептов ставит обещанный поиск («Показать в профессии»).
+    if event == "TRADE_SKILL_SHOW" then
+        self:Emit("tradeskill", "show")
+    elseif event == "TRADE_SKILL_LIST_UPDATE"
+        or event == "TRADE_SKILL_DATA_SOURCE_CHANGED" then
+        self:Emit("tradeskill", "update")
+    elseif event == "TRADE_SKILL_CLOSE" then
+        self:Emit("tradeskill", "close")
     end
 
     local flags = self.EVENT_MAP[event]
