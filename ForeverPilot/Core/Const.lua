@@ -3,7 +3,7 @@
 local ADDON, ns = ...
 
 ns.ADDON_NAME = ADDON or "ForeverPilot"
-ns.VERSION = "0.1.0"
+ns.VERSION = "0.2.0"
 
 -- Money ------------------------------------------------------------------
 ns.COPPER_PER_SILVER = 100

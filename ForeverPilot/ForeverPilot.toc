@@ -4,7 +4,7 @@
 ## Notes: Suggests the next best thing to do: craft, buy, enchant or sell. Advice only - you act.
 ## Notes-ruRU: Подсказывает, что сделать дальше: скрафтить, купить, наложить чары, продать. Только советы - действуете вы.
 ## Author: ForeverPilot
-## Version: 0.1.0
+## Version: 0.2.0
 ## IconTexture: Interface\AddOns\ForeverPilot\Media\Icon
 ## X-Media: 1
 ## AddonCompartmentFunc: ForeverPilot_OnAddonCompartmentClick
