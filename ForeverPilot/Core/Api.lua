@@ -1834,6 +1834,25 @@ end
 -- «Не нашёл» помнится недолго (ENCHANT_TEXT_RETRY секунд): сразу после входа
 -- подсказка бывает неполной, и запомнить этот ответ навсегда значило бы
 -- остаться с номером до конца сеанса. А спрашивать каждый проход незачем.
+-- «Чары: +4 к интеллекту» -> «+4 к интеллекту». Приставку ставит сам клиент
+-- (его строка ENCHANTED_TOOLTIP_LINE, «Чары: %s»), и в карточке она давала
+-- «чары «Чары: +4 к интеллекту»» - увидено в игре 2026-11-21. Приставка
+-- берётся у клиента; два написания рядом - запас на случай, если строки нет.
+local ENCHANT_PREFIXES = { "Чары: ", "Enchanted: " }
+local function stripEnchantPrefix(text)
+    local fmt = _G.ENCHANTED_TOOLTIP_LINE
+    if type(fmt) == "string" then
+        local prefix = fmt:match("^(.-)%%s")
+        if prefix and #prefix > 0 and text:sub(1, #prefix) == prefix then
+            return text:sub(#prefix + 1)
+        end
+    end
+    for i = 1, #ENCHANT_PREFIXES do
+        local prefix = ENCHANT_PREFIXES[i]
+        if text:sub(1, #prefix) == prefix then return text:sub(#prefix + 1) end
+    end
+    return text
+end
 function Api.EnchantLineOf(getTooltip, invID, kind)
     local data = getTooltip("player", invID)
     if type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
@@ -1843,7 +1862,7 @@ function Api.EnchantLineOf(getTooltip, invID, kind)
             -- Цветовые коды клиента из текста убираются: это разметка.
             local clean = line.leftText:gsub("|c%x%x%x%x%x%x%x%x", "")
             clean = clean:gsub("|r", "")
-            return clean
+            return stripEnchantPrefix(clean)
         end
     end
     return nil

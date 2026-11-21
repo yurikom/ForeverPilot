@@ -1091,6 +1091,20 @@ end)
 --     Logic/VendorArbitrage.lua (MARKUP_LIMIT), здесь - только запись в файл,
 --     потому что странности, поднятые во время сборки, до файла не доживают.
 check("arbitrage-markup-impossible", function(ctx)
+    -- Такие находки на экран больше не идут (Engine:AddArbitrageCards), но в
+    -- файле остаться обязаны: движок отдаёт их отдельным списком.
+    local hidden = ns.ActionEngine and ns.ActionEngine.meta
+        and ns.ActionEngine.meta.arbitrageImpossible or {}
+    for _, card in ipairs(hidden) do
+        local v = card.markupVerdict
+        local opp = card.arbitrage or {}
+        Diag:Suspect("arbitrage-markup-impossible", string.format(
+            "«%s» (в список не поставлено): %s", card.title or tostring(card.itemID), v.text),
+            { key = card.key, itemID = card.itemID, hidden = true,
+              ask = v.ask, revenue = v.revenue, markup = v.markup,
+              npcID = opp.npcID, npcName = opp.npcName,
+              askSrc = opp.askSrc })
+    end
     for _, card in ipairs(ctx.cards) do
         local v = card.markupVerdict
         if v and v.code == "markup-impossible" then

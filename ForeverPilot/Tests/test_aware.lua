@@ -219,6 +219,33 @@ do
     H.eq(calls.n, 1, "и подсказка прочитана один раз")
 end
 
+H.suite("Чары: приставка клиента «Чары: » в текст не попадает")
+do
+    -- Увидено в игре (2026-11-21): строка подсказки - «Чары: +4 к интеллекту»,
+    -- и в карточке выходило «чары «Чары: +4 к интеллекту»».
+    local env, ns = tooltipWorld(function()
+        return { { type = ENCHANT_LINE, leftText = "Чары: +4 к интеллекту" } }
+    end)
+    env.G.ENCHANTED_TOOLTIP_LINE = "Чары: %s"
+    H.eq(ns.Api:InventoryEnchantText(5, 301, 843), "+4 к интеллекту",
+        "приставка снята по строке клиента")
+
+    -- Строки клиента нет - приставка всё равно снимается.
+    local env2, ns2 = tooltipWorld(function()
+        return { { type = ENCHANT_LINE, leftText = "|cff00ff00Чары: Откровение|r" } }
+    end)
+    env2.G.ENCHANTED_TOOLTIP_LINE = nil
+    H.eq(ns2.Api:InventoryEnchantText(16, 8217, 8217), "Откровение",
+        "и без строки клиента тоже")
+
+    -- Текст без приставки не трогается.
+    local env3, ns3 = tooltipWorld(function()
+        return { { type = ENCHANT_LINE, leftText = "+60 к броне" } }
+    end)
+    env3.G.ENCHANTED_TOOLTIP_LINE = "Чары: %s"
+    H.eq(ns3.Api:InventoryEnchantText(15, 884, 884), "+60 к броне", "без приставки - как есть")
+end
+
 H.suite("Чары: обычная зелёная строка за чары не выдаётся")
 do
     -- Типа «чары» в подсказке нет: брать строку по цвету или по месту значило

@@ -860,6 +860,24 @@ do
         "карточки «поставить аквариум» нет: он на откате")
     H.eq(byKeyPrefix(cards, "camp:make:" .. FISH_BOWL), nil,
         "и «сделать» тоже нет: предмет лежит в сумках")
+    -- Увидено в игре: аквариум на откате, а «Разжечь костёр» оставалась одна -
+    -- совет зажечь костёр, к которому нечего поставить.
+    env.bags[BASIC_FIRE] = 3
+    H.itemsChanged(env)
+    local withFire = campCards(env)
+    H.eq(byKeyPrefix(withFire, "camp:place:" .. BASIC_FIRE), nil,
+        "костёр разжигать не советуем: ставить к нему нечего")
+    H.eq(byKeyPrefix(withFire, "camp:fire:" .. BASIC_FIRE), nil,
+        "и делать костёр тоже")
+    local own = 0
+    for _, c in ipairs(withFire) do
+        local key = tostring(c.key)
+        if key:sub(1, 11) == "camp:place:" or key:sub(1, 10) == "camp:make:"
+            or key:sub(1, 10) == "camp:fire:" then own = own + 1 end
+    end
+    H.eq(own, 0, "ни одной карточки «поставить / сделать / разжечь»")
+    env.bags[BASIC_FIRE] = nil
+    H.itemsChanged(env)
 
     -- Откат прошёл - карточка на месте.
     env.G.C_Container.GetItemCooldown = function() return 0, 0, 1 end

@@ -2199,8 +2199,38 @@ function Engine:AddArbitrageCards(snap, scales)
     local opps = ns.VendorArbitrage:Opportunities()
     local added = 0
 
+    -- НАЦЕНКУ, КОТОРОЙ Я САМ НЕ ВЕРЮ, В СПИСОК НЕ СТАВЛЮ.
+    --
+    -- Раньше такая карточка оставалась на экране с пометкой «сомнительно» и
+    -- уезжала вниз. В живом списке игрока (2026-11-21) это были пять карточек:
+    -- «Купить и перепродать: Черный лотос» - 40с у торговца против 10з на
+    -- аукционе, в 26 раз, - и ещё четыре того же торговца. Вердикт по ним уже
+    -- был «ошибка в данных», а совет при этом стоял в списке. Совет, которому
+    -- не верит сам советчик, - не совет: игрок действует сразу. Находки не
+    -- пропадают молча: они в meta.arbitrageImpossible, самопроверка пишет их
+    -- в файл (Logic/SanityChecks.lua), а пустая ветка называет причину.
+    local impossible = {}
+    for _, opp in ipairs(opps) do
+        local v = opp.markupVerdict
+        if v and v.code == "markup-impossible" then
+            impossible[#impossible + 1] = {
+                key = "arb:" .. tostring(opp.itemID),
+                title = "Купить и перепродать: " .. tostring(opp.name),
+                name = opp.name, itemID = opp.itemID,
+                markupVerdict = v, arbitrage = opp,
+            }
+        end
+    end
+    self.meta.arbitrageImpossible = impossible
+    if #impossible > 0 and ns.Diag then
+        ns.Diag:Count("arbitrage.impossibleNotShown", #impossible)
+    end
+
     for _, opp in ipairs(opps) do
         if added >= ns.MAX_CARDS_PER_KIND then break end
+        local believable = not (opp.markupVerdict
+            and opp.markupVerdict.code == "markup-impossible")
+        if believable then
         added = added + 1
 
         local axes = blankAxes()
@@ -2303,9 +2333,16 @@ function Engine:AddArbitrageCards(snap, scales)
             arbitrage = opp,
             matPrice = { unit = opp.ask, src = opp.askSrc, conf = opp.askConf },
         }, looks))
+        end -- believable
     end
 
-    if added == 0 then
+    if added == 0 and #impossible > 0 then
+        self.branchNote.arbitrage = "перепродажу не советую: " .. #impossible .. " "
+            .. U.plural(#impossible, "находка", "находки", "находок")
+            .. " с наценкой, которой не бывает (например, "
+            .. tostring(impossible[1].name) .. ") — это ошибка в данных о цене"
+            .. " торговца, а не заработок"
+    elseif added == 0 then
         local skipped = ns.VendorArbitrage.lastCurrencySkipped or 0
         self.branchNote.arbitrage = (skipped > 0)
             and ("ни одной перепродажи: у " .. skipped .. " "
@@ -3227,7 +3264,11 @@ function Engine:AddCampCards(snap, scales)
     --    игрока - узнать нечем (функций про лагерь в клиенте нет). Поэтому он
     --    не вытесняет лучший совет, но и не уходит из списка за то, что его
     --    бонус скромнее.
+    -- СВОЙ ПРЕДМЕТ НА ОТКАТЕ - КОСТЁР РАЗЖИГАТЬ НЕЗАЧЕМ. Увидено в игре
+    -- (2026-11-21): аквариум на перезарядке, карточки про него нет, а «Разжечь
+    -- костёр» осталась одна - совет зажечь костёр, к которому нечего поставить.
     local fire = plan.fireNow
+    if #onCooldown > 0 then fire = nil end
     if fire and added < 4 and not shown[fire.item] and placeInstead(fire, true) then
         shown[fire.item] = true
     elseif fire and added < 4 and not shown[fire.item] then

@@ -403,9 +403,14 @@ do
     end
 end
 
-H.suite("Арбитраж: наценка выше порога «не верю» — карточка помечена сомнительной")
+H.suite("Арбитраж: наценка выше порога «не верю» — совета в списке нет, причина названа")
 do
     -- 40с -> 9з 98с, как Чёрный лотос в живом прогоне: наценка 23.7 раз.
+    --
+    -- Раньше такая карточка оставалась на экране с пометкой «сомнительно». В
+    -- живом списке игрока (2026-11-21) это были пять советов купить у торговца
+    -- то, чего он по такой цене не продаёт. Совет, которому не верит сам
+    -- советчик, в список больше не идёт; находка при этом не пропадает молча.
     local env = arbEnv { ask = 4000, auction = 99800 }
     local ns = env.ns
     H.rescan(env)
@@ -417,23 +422,25 @@ do
             "вердикт: такой наценке я не верю")
     end
     local cards = H.build(env)
-    local c = arbCard(cards, ns)
-    H.ok(c ~= nil, "карточка на экране осталась")
-    if c then
-        H.ok(ns.Util.contains(c.benefit or "", "сомнительно"),
-            "заголовок предупреждает: " .. tostring(c.benefit))
-        H.eq(c.conf, ns.CONF.UNKNOWN, "достоверность снята совсем")
-        H.ok(c.suspect ~= nil, "и карточка помечена сомнительной")
-        H.ok(ns.Util.contains(c.why or "", "не сходятся"),
-            "текст объясняет, что числа не сходятся")
-    end
-    -- И это видно в диагностике, а не только на экране.
+    H.eq(arbCard(cards, ns), nil, "карточки на экране нет")
+    local hidden = ns.ActionEngine.meta.arbitrageImpossible or {}
+    H.eq(#hidden, 1, "находка лежит в отдельном списке движка")
+    local note = ns.ActionEngine.branchNote.arbitrage or ""
+    H.ok(ns.Util.contains(note, "наценкой, которой не бывает"),
+        "пустая ветка называет причину: " .. note)
+    H.ok(ns.Util.contains(note, "ошибка в данных"), "и говорит, что это ошибка данных")
+    H.ok((ns.Diag:Init().counters["arbitrage.impossibleNotShown"] or 0) >= 1,
+        "в счётчиках это есть")
+    -- И это видно в диагностике, а не только в заметке ветки.
     local susp = ns.Diag:Init().suspicious or {}
     local found = false
     for _, s in ipairs(susp) do
-        if s.code == "arbitrage-markup-impossible" then found = true end
+        if s.code == "arbitrage-markup-impossible"
+            and ns.Util.contains(s.text or "", "в список не поставлено") then
+            found = true
+        end
     end
-    H.ok(found, "странность записана в диагностику")
+    H.ok(found, "странность записана в диагностику с пометкой, что совет не показан")
 end
 
 -- ПОЛЯРНОСТЬ ЦЕНЫ НА ПУТИ ЧЕРЕЗ CODEX ====================================
@@ -534,13 +541,10 @@ do
         H.eq(opp.conf, ns.CONF.UNKNOWN, "достоверность снята совсем")
     end
     local cards = H.build(env)
-    local c = arbCard(cards, ns)
-    H.ok(c ~= nil, "карточка на экране осталась")
-    if c then
-        H.ok(ns.Util.contains(c.benefit or "", "сомнительно"),
-            "но помечена сомнительной: " .. tostring(c.benefit))
-        H.ok(c.suspect ~= nil, "и флаг сомнения стоит")
-    end
+    H.eq(arbCard(cards, ns), nil,
+        "карточки на экране нет: цену торговца никто не видел, а наценка невозможная")
+    H.eq(#(ns.ActionEngine.meta.arbitrageImpossible or {}), 1,
+        "находка лежит в отдельном списке движка, а не пропала")
 end
 
 H.suite("Арбитраж: та же наценка на цене, которую игрок видел сам, — только упомянута")
